@@ -9,7 +9,7 @@ import {
   Layers, 
   BarChart3, 
   UploadCloud, 
-  Settings, 
+  Settings as SettingsIcon, 
   LogOut, 
   ShieldCheck, 
   DollarSign, 
@@ -29,6 +29,7 @@ import ExpiryManagement from './ExpiryManagement';
 import AuditTrail from './AuditTrail';
 import InvoicesAndCredits from './InvoicesAndCredits';
 import PatientsAndPrescriptions from './PatientsAndPrescriptions';
+import Settings from './Settings';
 
 import { useAuth } from './AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -66,6 +67,23 @@ export default function ProfessionalLayout() {
     navigate('/login');
   };
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F2') { e.preventDefault(); setActiveTab('sales'); }
+      else if (e.key === 'F3') { e.preventDefault(); setActiveTab('inventory'); }
+      else if (e.key === 'F4') { e.preventDefault(); setActiveTab('purchases'); }
+      else if (e.key === 'F5') { e.preventDefault(); setActiveTab('invoices'); }
+      else if (e.key === 'F6') { e.preventDefault(); setActiveTab('credits'); }
+      else if (e.key === 'F7') { e.preventDefault(); setActiveTab('patients'); }
+      else if (e.key === 'F8') { e.preventDefault(); setActiveTab('dashboard'); }
+      else if (e.key === 'F9') { e.preventDefault(); setActiveTab('expiry'); }
+      else if (e.key === 'F10') { e.preventDefault(); setActiveTab('audit'); }
+      else if (e.key === 'F11') { e.preventDefault(); setActiveTab('settings'); }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const navItems = [
     { id: 'sales', label: 'Caisse Rapide', shortcut: 'F2', icon: ShoppingCart },
     { id: 'inventory', label: 'Stock & Articles', shortcut: 'F3', icon: Package, badge: alertCount },
@@ -76,6 +94,7 @@ export default function ProfessionalLayout() {
     { id: 'dashboard', label: 'Tableau de Bord', shortcut: 'F8', icon: BarChart3 },
     { id: 'expiry', label: 'Péremptions (Lots)', shortcut: 'F9', icon: Clock },
     { id: 'audit', label: 'Traçabilité (Audit)', shortcut: 'F10', icon: ShieldCheck },
+    { id: 'settings', label: 'Paramètres ERP', shortcut: 'F11', icon: SettingsIcon },
   ];
 
   return (
@@ -213,27 +232,7 @@ export default function ProfessionalLayout() {
         {activeTab === 'patients' && <PatientsAndPrescriptions />}
         {activeTab === 'expiry' && <ExpiryManagement />}
         {activeTab === 'audit' && <AuditTrail />}
-        
-        {/* Placeholder tab for in-progress modules with high aesthetic */}
-        {(activeTab === 'invoices' || activeTab === 'credits' || activeTab === 'settings') && (
-          <div className="p-8 max-w-4xl mx-auto my-12 bg-[#0c1222] border border-slate-800 rounded-2xl p-8 text-center space-y-4">
-            <div className="w-14 h-14 rounded-2xl bg-blue-600/10 border border-blue-500/30 text-blue-400 mx-auto flex items-center justify-center">
-              <FileText size={28} />
-            </div>
-            <h2 className="text-xl font-bold text-white">
-              {activeTab === 'invoices' ? 'Registre des Factures de Ventes' : activeTab === 'credits' ? 'Gestion des Crédits & Assurances' : 'Configuration Système Pharmacie'}
-            </h2>
-            <p className="text-xs text-slate-400 max-w-md mx-auto">
-              Module interconnecté avec le grand livre comptable et le moteur de synchronisation multi-dépôt.
-            </p>
-            <button
-              onClick={() => setActiveTab('sales')}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold"
-            >
-              Retourner à la Caisse Rapide [F2]
-            </button>
-          </div>
-        )}
+        {activeTab === 'settings' && <Settings />}
       </main>
     </div>
   );
