@@ -1,0 +1,149 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System user account",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "pharmacist", "staff"] }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Profile": {
+      "title": "Profile",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" }
+      },
+      "required": ["userId", "displayName"]
+    },
+    "Alert": {
+      "title": "Alert",
+      "description": "Stock alert",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "message": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "productId", "message", "status"]
+    },
+    "Procurement": {
+      "title": "Procurement",
+      "description": "Stock procurement order",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "quantity": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "productId", "quantity", "status"]
+    },
+    "Sale": {
+      "title": "Sale",
+      "description": "Pharmacy sale record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "quantity": { "type": "number" },
+        "amount": { "type": "number" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "productId", "quantity", "amount", "timestamp"]
+    },
+    "Site": {
+      "title": "Site",
+      "description": "Pharmacy location",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "Lot": {
+      "title": "Lot",
+      "description": "Product batch with expiry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "expiryDate": { "type": "string", "format": "date" },
+        "quantity": { "type": "number" }
+      },
+      "required": ["id", "productId", "expiryDate", "quantity"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "System action history",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "action": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "action", "timestamp"]
+    },
+    "Patient": {
+      "title": "Patient",
+      "description": "Patient record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "history": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["id", "name"]
+    },
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "System users"
+    },
+    "/users/{userId}/profile/{profileId}": {
+      "schema": "Profile",
+      "description": "User profiles"
+    },
+    "/sites/{siteId}/alerts/{alertId}": {
+      "schema": "Alert",
+      "description": "Alerts for a site"
+    },
+    "/sites/{siteId}/procurement/{procurementId}": {
+      "schema": "Procurement",
+      "description": "Procurement orders"
+    },
+    "/sites/{siteId}/sales/{saleId}": {
+      "schema": "Sale",
+      "description": "Sales records"
+    },
+    "/sites/{siteId}": {
+      "schema": "Site",
+      "description": "Individual pharmacy site"
+    },
+    "/sites/{siteId}/lots/{lotId}": {
+      "schema": "Lot",
+      "description": "Inventory lots with expiry"
+    },
+    "/sites/{siteId}/auditlogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "System audit logs"
+    },
+    "/sites/{siteId}/patients/{patientId}": {
+      "schema": "Patient",
+      "description": "Patient records"
+    },
+    "/sites/{siteId}/inventory/{productId}": {
+      "schema": "Product",
+      "description": "Inventory at a site"
+    }
+  }
+}

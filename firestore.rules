@@ -1,0 +1,46 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    match /sites/{siteId} {
+      // Accès lecture et écriture pour les opérateurs authentifiés
+      allow read, write: if request.auth != null;
+      
+      match /inventory/{productId} {
+        allow read, write: if request.auth != null;
+      }
+      
+      match /procurement/{procurementId} {
+        allow read, write: if request.auth != null;
+      }
+
+      match /sales/{saleId} {
+        allow read, write: if request.auth != null;
+      }
+
+      match /credits/{creditId} {
+        allow read, write: if request.auth != null;
+      }
+
+      match /auditlogs/{logId} {
+        allow read, create: if request.auth != null;
+        allow update, delete: if false;
+      }
+
+      match /lots/{lotId} {
+        allow read, write: if request.auth != null;
+      }
+    }
+
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      
+      match /profile/{profileId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+  }
+}
