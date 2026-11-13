@@ -1,6 +1,6 @@
 {
-  "name": "PharmaFlow",
-  "description": "Logiciel de gestion pharmaceutique pour automatiser les stocks et le suivi des prescriptions.",
+  "name": "SHEKINAH PHARMA",
+  "description": "SHEKINAH PHARMA — Logiciel ERP de gestion pharmaceutique pour automatiser les stocks, la caisse POS et le suivi des prescriptions.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

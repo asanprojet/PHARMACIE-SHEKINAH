@@ -1,23 +1,31 @@
 import { useEffect, useState } from 'react';
-import { db, auth } from './firebase';
-import { collection, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, query, orderBy } from 'firebase/firestore';
-import { 
-  Users, 
-  FileText, 
-  Search, 
-  Plus, 
-  HeartPulse, 
-  AlertCircle, 
-  Calendar, 
-  Phone, 
-  MapPin, 
+import { db } from './firebase';
+import {
+  collection,
+  onSnapshot,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  serverTimestamp,
+  query,
+  orderBy,
+} from 'firebase/firestore';
+import {
+  Users,
+  Search,
+  Plus,
+  HeartPulse,
   CheckCircle,
   FileCheck,
   ShieldCheck,
-  Sparkles,
-  Layers
+  Edit3,
+  Trash2,
 } from 'lucide-react';
 import Modal from './Modal';
+import { useAuth } from './AuthContext';
+import { useToast } from './ToastContext';
+import { OperationType, handleFirestoreError, formatReadableError } from './firestoreUtils';
 
 interface PatientRecord {
   id: string;
@@ -30,13 +38,14 @@ interface PatientRecord {
   allergies: string;
   chronicConditions: string;
   insuranceName: string;
-  insuranceRate: number; // e.g. 80%
+  insuranceRate: number;
   fidelityPoints: number;
   fidelityTier: 'BRONZE' | 'SILVER' | 'GOLD' | 'PLATINUM';
 }
 
 interface PrescriptionRecord {
   id: string;
+  rxCode?: string;
   patientId: string;
   patientName: string;
   doctorName: string;
@@ -47,130 +56,341 @@ interface PrescriptionRecord {
 }
 
 export default function PatientsAndPrescriptions() {
+  const { authReady, firebaseUser, currentUser } = useAuth();
+  const { showToast, confirmAction } = useToast();
+  const siteId = currentUser?.siteId || 'site1';
+
   const [patients, setPatients] = useState<PatientRecord[]>([]);
   const [prescriptions, setPrescriptions] = useState<PrescriptionRecord[]>([]);
   const [activeSubTab, setActiveSubTab] = useState<'patients' | 'prescriptions'>('patients');
   const [searchTerm, setSearchTerm] = useState('');
-  const [siteId] = useState('site1');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // New Patient Modal
+  // Patient Create / Edit Modal
   const [isPatientModalOpen, setIsPatientModalOpen] = useState(false);
+  const [editingPatient, setEditingPatient] = useState<PatientRecord | null>(null);
   const [pName, setPName] = useState('');
   const [pPhone, setPPhone] = useState('+243 81 ');
   const [pAddress, setPAddress] = useState('Kinshasa - Gombe');
   const [pAge, setPAge] = useState('35');
   const [pGender, setPGender] = useState<'M' | 'F'>('M');
   const [pAllergies, setPAllergies] = useState('Aucune connue');
-  const [pConditions, setPConditions] = useState('Hypertension');
+  const [pConditions, setPConditions] = useState('Général');
   const [pInsurance, setPInsurance] = useState('ASCOMA ASSURANCE');
   const [pInsuranceRate, setPInsuranceRate] = useState('80');
+  const [pFidelityPoints, setPFidelityPoints] = useState('50');
+  const [pFidelityTier, setPFidelityTier] = useState<'BRONZE' | 'SILVER' | 'GOLD' | 'PLATINUM'>('SILVER');
 
-  // New Prescription Modal
+  // Prescription Create / Edit Modal
   const [isRxModalOpen, setIsRxModalOpen] = useState(false);
+  const [editingRx, setEditingRx] = useState<PrescriptionRecord | null>(null);
   const [rxPatientId, setRxPatientId] = useState('');
+  const [rxWalkInName, setRxWalkInName] = useState('');
   const [rxDoctor, setRxDoctor] = useState('Dr. Kabongo (Clinique Ngaliema)');
-  const [rxDrugs, setRxDrugs] = useState('Paracétamol Sirop, Clamoxyl 500mg, Gaviscon');
-  const [rxNotes, setRxNotes] = useState('Posologie : 1 gélule 3 fois par jour après les repas');
+  const [rxDrugs, setRxDrugs] = useState('');
+  const [rxNotes, setRxNotes] = useState('Posologie : 1 prise 3 fois par jour après les repas');
+  const [rxStatus, setRxStatus] = useState<'DELIVRE' | 'PARTIEL' | 'EN_ATTENTE'>('DELIVRE');
 
   useEffect(() => {
-    // 1. Fetch Patients
-    const patientsRef = collection(db, 'sites', siteId, 'patients');
-    const unsubsPatients = onSnapshot(patientsRef, (snap) => {
-      setPatients(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-    });
+    if (!authReady || !firebaseUser) return;
 
-    // 2. Fetch Prescriptions
+    const patientsRef = collection(db, 'sites', siteId, 'patients');
+    const unsubsPatients = onSnapshot(
+      patientsRef,
+      (snap) => {
+        setPatients(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
+      },
+      (err) => {
+        showToast(formatReadableError(err), 'error');
+        try {
+          handleFirestoreError(err, OperationType.LIST, `sites/${siteId}/patients`);
+        } catch {
+          // logged
+        }
+      }
+    );
+
     const rxRef = collection(db, 'sites', siteId, 'prescriptions');
     const qRx = query(rxRef, orderBy('createdAt', 'desc'));
-    const unsubsRx = onSnapshot(qRx, (snap) => {
-      setPrescriptions(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-    });
+    const unsubsRx = onSnapshot(
+      qRx,
+      (snap) => {
+        setPrescriptions(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
+      },
+      (err) => {
+        showToast(formatReadableError(err), 'error');
+        try {
+          handleFirestoreError(err, OperationType.LIST, `sites/${siteId}/prescriptions`);
+        } catch {
+          // logged
+        }
+      }
+    );
 
     return () => {
       unsubsPatients();
       unsubsRx();
     };
-  }, [siteId]);
+  }, [authReady, firebaseUser, siteId, showToast]);
 
   const logAction = async (action: string) => {
-    if (!auth.currentUser) return;
     try {
       await addDoc(collection(db, 'sites', siteId, 'auditlogs'), {
-        userId: auth.currentUser.email || auth.currentUser.uid,
+        userId: currentUser?.email || firebaseUser?.email || 'Pharmacien',
         action,
-        timestamp: serverTimestamp()
+        timestamp: serverTimestamp(),
       });
     } catch (e) {
       console.warn('Audit log error:', e);
     }
   };
 
-  const handleCreatePatient = async () => {
-    if (!pName.trim()) {
-      alert('Veuillez renseigner le nom complet du patient.');
-      return;
-    }
-
-    const code = `PAT-${Date.now().toString().slice(-5)}`;
-    await addDoc(collection(db, 'sites', siteId, 'patients'), {
-      code,
-      fullName: pName,
-      phone: pPhone,
-      address: pAddress,
-      age: parseInt(pAge, 10) || 30,
-      gender: pGender,
-      allergies: pAllergies,
-      chronicConditions: pConditions,
-      insuranceName: pInsurance,
-      insuranceRate: parseInt(pInsuranceRate, 10) || 0,
-      fidelityPoints: 50,
-      fidelityTier: 'SILVER',
-      createdAt: serverTimestamp()
-    });
-
-    await logAction(`Création Dossier Patient : ${code} - ${pName} (${pInsurance})`);
-    setIsPatientModalOpen(false);
+  const openNewPatientModal = () => {
+    setEditingPatient(null);
     setPName('');
+    setPPhone('+243 81 ');
+    setPAddress('Kinshasa - Gombe');
+    setPAge('35');
+    setPGender('M');
+    setPAllergies('Aucune connue');
+    setPConditions('Général');
+    setPInsurance('ASCOMA ASSURANCE');
+    setPInsuranceRate('80');
+    setPFidelityPoints('50');
+    setPFidelityTier('SILVER');
+    setIsPatientModalOpen(true);
   };
 
-  const handleCreatePrescription = async () => {
-    const patient = patients.find(p => p.id === rxPatientId) || patients[0];
-    if (!patient || !rxDrugs.trim()) {
-      alert('Veuillez renseigner le patient et les médicaments prescrits.');
+  const openEditPatientModal = (pat: PatientRecord) => {
+    setEditingPatient(pat);
+    setPName(pat.fullName || '');
+    setPPhone(pat.phone || '');
+    setPAddress(pat.address || '');
+    setPAge(String(pat.age ?? 30));
+    setPGender(pat.gender || 'M');
+    setPAllergies(pat.allergies || 'Aucune connue');
+    setPConditions(pat.chronicConditions || 'Général');
+    setPInsurance(pat.insuranceName || 'AUCUNE (PARTICULIER)');
+    setPInsuranceRate(String(pat.insuranceRate ?? 0));
+    setPFidelityPoints(String(pat.fidelityPoints ?? 50));
+    setPFidelityTier(pat.fidelityTier || 'SILVER');
+    setIsPatientModalOpen(true);
+  };
+
+  const handleSavePatient = async () => {
+    if (!pName.trim()) {
+      showToast('Veuillez renseigner le nom complet du patient.', 'error');
       return;
     }
 
-    const rxCode = `ORD-${Date.now().toString().slice(-5)}`;
-    const drugList = rxDrugs.split(',').map(s => s.trim()).filter(Boolean);
+    setIsSubmitting(true);
+    try {
+      if (editingPatient) {
+        const path = `sites/${siteId}/patients/${editingPatient.id}`;
+        await updateDoc(doc(db, 'sites', siteId, 'patients', editingPatient.id), {
+          fullName: pName.trim(),
+          phone: pPhone.trim(),
+          address: pAddress.trim(),
+          age: parseInt(pAge, 10) || 30,
+          gender: pGender,
+          allergies: pAllergies.trim() || 'Aucune connue',
+          chronicConditions: pConditions.trim() || 'Général',
+          insuranceName: pInsurance,
+          insuranceRate: pInsurance.includes('AUCUNE') ? 0 : parseInt(pInsuranceRate, 10) || 0,
+          fidelityPoints: parseInt(pFidelityPoints, 10) || 0,
+          fidelityTier: pFidelityTier,
+          updatedAt: serverTimestamp(),
+        });
+        await logAction(`Mise à jour Dossier Patient : ${editingPatient.code} - ${pName.trim()}`);
+        showToast('Dossier patient mis à jour.', 'success');
+      } else {
+        const code = `PAT-${Date.now().toString().slice(-5)}`;
+        await addDoc(collection(db, 'sites', siteId, 'patients'), {
+          code,
+          fullName: pName.trim(),
+          phone: pPhone.trim(),
+          address: pAddress.trim(),
+          age: parseInt(pAge, 10) || 30,
+          gender: pGender,
+          allergies: pAllergies.trim() || 'Aucune connue',
+          chronicConditions: pConditions.trim() || 'Général',
+          insuranceName: pInsurance,
+          insuranceRate: pInsurance.includes('AUCUNE') ? 0 : parseInt(pInsuranceRate, 10) || 0,
+          fidelityPoints: parseInt(pFidelityPoints, 10) || 50,
+          fidelityTier: pFidelityTier,
+          createdAt: serverTimestamp(),
+        });
+        await logAction(`Création Dossier Patient : ${code} - ${pName.trim()} (${pInsurance})`);
+        showToast(`Patient ${code} enregistré avec succès.`, 'success');
+      }
 
-    await addDoc(collection(db, 'sites', siteId, 'prescriptions'), {
-      rxCode,
-      patientId: patient.id,
-      patientName: patient.fullName,
-      doctorName: rxDoctor,
-      prescribedMedicines: drugList,
-      date: new Date().toLocaleDateString(),
-      status: 'DELIVRE',
-      notes: rxNotes,
-      createdAt: serverTimestamp(),
-      dispensedBy: auth.currentUser?.email || 'Pharmacien Dispensateur'
-    });
-
-    await logAction(`Délivrance Ordonnance ${rxCode} pour ${patient.fullName} (${drugList.length} spécialités)`);
-    setIsRxModalOpen(false);
-    setRxDrugs('');
+      setIsPatientModalOpen(false);
+      setEditingPatient(null);
+    } catch (err) {
+      showToast(formatReadableError(err), 'error');
+      try {
+        handleFirestoreError(
+          err,
+          editingPatient ? OperationType.UPDATE : OperationType.CREATE,
+          editingPatient ? `sites/${siteId}/patients/${editingPatient.id}` : `sites/${siteId}/patients`
+        );
+      } catch {
+        // logged
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const filteredPatients = patients.filter(p => 
-    p.fullName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.phone?.includes(searchTerm) ||
-    p.insuranceName?.toLowerCase().includes(searchTerm.toLowerCase())
+  const handleDeletePatient = async (pat: PatientRecord) => {
+    const confirmed = await confirmAction({
+      title: 'Supprimer le dossier patient ?',
+      message: `Voulez-vous supprimer définitivement le dossier de ${pat.fullName} (${pat.code}) ?`,
+      confirmLabel: 'Supprimer le dossier',
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    const path = `sites/${siteId}/patients/${pat.id}`;
+    try {
+      await deleteDoc(doc(db, 'sites', siteId, 'patients', pat.id));
+      await logAction(`Suppression Dossier Patient : ${pat.code} - ${pat.fullName}`);
+      showToast('Dossier patient supprimé.', 'info');
+    } catch (err) {
+      showToast(formatReadableError(err), 'error');
+      try {
+        handleFirestoreError(err, OperationType.DELETE, path);
+      } catch {
+        // logged
+      }
+    }
+  };
+
+  const openNewRxModal = () => {
+    setEditingRx(null);
+    setRxPatientId(patients.length > 0 ? patients[0].id : '__WALKIN__');
+    setRxWalkInName('');
+    setRxDoctor('Dr. Kabongo (Clinique Ngaliema)');
+    setRxDrugs('');
+    setRxNotes('Posologie : 1 prise 3 fois par jour après les repas');
+    setRxStatus('DELIVRE');
+    setIsRxModalOpen(true);
+  };
+
+  const openEditRxModal = (rx: PrescriptionRecord) => {
+    setEditingRx(rx);
+    setRxPatientId(rx.patientId && patients.some((p) => p.id === rx.patientId) ? rx.patientId : '__WALKIN__');
+    setRxWalkInName(rx.patientName || '');
+    setRxDoctor(rx.doctorName || '');
+    setRxDrugs(Array.isArray(rx.prescribedMedicines) ? rx.prescribedMedicines.join(', ') : String(rx.prescribedMedicines || ''));
+    setRxNotes(rx.notes || '');
+    setRxStatus(rx.status || 'DELIVRE');
+    setIsRxModalOpen(true);
+  };
+
+  const handleSavePrescription = async () => {
+    const matchedPatient = rxPatientId !== '__WALKIN__' ? patients.find((p) => p.id === rxPatientId) : undefined;
+    const finalPatientName = matchedPatient ? matchedPatient.fullName : rxWalkInName.trim();
+
+    if (!finalPatientName || !rxDrugs.trim()) {
+      showToast('Veuillez renseigner le patient et les médicaments prescrits.', 'error');
+      return;
+    }
+
+    const drugList = rxDrugs
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    setIsSubmitting(true);
+    try {
+      if (editingRx) {
+        const path = `sites/${siteId}/prescriptions/${editingRx.id}`;
+        await updateDoc(doc(db, 'sites', siteId, 'prescriptions', editingRx.id), {
+          patientId: matchedPatient ? matchedPatient.id : 'WALKIN',
+          patientName: finalPatientName,
+          doctorName: rxDoctor.trim(),
+          prescribedMedicines: drugList,
+          status: rxStatus,
+          notes: rxNotes.trim(),
+          updatedAt: serverTimestamp(),
+        });
+        await logAction(`Modification Ordonnance ${editingRx.rxCode || editingRx.id} pour ${finalPatientName} (${rxStatus})`);
+        showToast('Ordonnance mise à jour.', 'success');
+      } else {
+        const rxCode = `ORD-${Date.now().toString().slice(-5)}`;
+        await addDoc(collection(db, 'sites', siteId, 'prescriptions'), {
+          rxCode,
+          patientId: matchedPatient ? matchedPatient.id : 'WALKIN',
+          patientName: finalPatientName,
+          doctorName: rxDoctor.trim(),
+          prescribedMedicines: drugList,
+          date: new Date().toLocaleDateString(),
+          status: rxStatus,
+          notes: rxNotes.trim(),
+          createdAt: serverTimestamp(),
+          dispensedBy: currentUser?.email || firebaseUser?.email || 'Pharmacien Dispensateur',
+        });
+        await logAction(`Délivrance Ordonnance ${rxCode} pour ${finalPatientName} (${drugList.length} spécialités)`);
+        showToast(`Ordonnance ${rxCode} enregistrée.`, 'success');
+      }
+
+      setIsRxModalOpen(false);
+      setEditingRx(null);
+      setRxDrugs('');
+    } catch (err) {
+      showToast(formatReadableError(err), 'error');
+      try {
+        handleFirestoreError(
+          err,
+          editingRx ? OperationType.UPDATE : OperationType.CREATE,
+          editingRx ? `sites/${siteId}/prescriptions/${editingRx.id}` : `sites/${siteId}/prescriptions`
+        );
+      } catch {
+        // logged
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteRx = async (rx: PrescriptionRecord) => {
+    const confirmed = await confirmAction({
+      title: "Supprimer l'ordonnance ?",
+      message: `Voulez-vous supprimer l'ordonnance ${rx.rxCode || rx.id} de ${rx.patientName} ?`,
+      confirmLabel: 'Supprimer',
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    const path = `sites/${siteId}/prescriptions/${rx.id}`;
+    try {
+      await deleteDoc(doc(db, 'sites', siteId, 'prescriptions', rx.id));
+      await logAction(`Suppression Ordonnance ${rx.rxCode || rx.id} (${rx.patientName})`);
+      showToast('Ordonnance supprimée.', 'info');
+    } catch (err) {
+      showToast(formatReadableError(err), 'error');
+      try {
+        handleFirestoreError(err, OperationType.DELETE, path);
+      } catch {
+        // logged
+      }
+    }
+  };
+
+  const filteredPatients = patients.filter(
+    (p) =>
+      p.fullName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      p.code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      p.phone?.includes(searchTerm) ||
+      p.insuranceName?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const filteredRx = prescriptions.filter(rx => 
-    rx.patientName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    rx.doctorName?.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredRx = prescriptions.filter(
+    (rx) =>
+      rx.patientName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      rx.doctorName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      rx.rxCode?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -208,20 +428,17 @@ export default function PatientsAndPrescriptions() {
 
           {activeSubTab === 'patients' ? (
             <button
-              onClick={() => setIsPatientModalOpen(true)}
+              onClick={openNewPatientModal}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm"
             >
-              <Plus size={15} /> + Nouveau Patient
+              <Plus size={15} /> Nouveau Patient
             </button>
           ) : (
             <button
-              onClick={() => {
-                if (patients.length > 0) setRxPatientId(patients[0].id);
-                setIsRxModalOpen(true);
-              }}
+              onClick={openNewRxModal}
               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm"
             >
-              <FileCheck size={15} /> + Enregistrer Ordonnance
+              <FileCheck size={15} /> Enregistrer Ordonnance
             </button>
           )}
         </div>
@@ -261,7 +478,7 @@ export default function PatientsAndPrescriptions() {
               PATIENTS COUVERTS ASSURANCE
             </span>
             <div className="text-2xl font-mono font-extrabold text-purple-400">
-              {patients.filter(p => p.insuranceRate > 0).length}
+              {patients.filter((p) => (p.insuranceRate || 0) > 0).length}
             </div>
             <div className="text-[11px] text-purple-400 mt-1">Tiers payant actif</div>
           </div>
@@ -280,8 +497,8 @@ export default function PatientsAndPrescriptions() {
           onChange={(e) => setSearchTerm(e.target.value)}
           placeholder={
             activeSubTab === 'patients'
-              ? "Rechercher par nom de patient, matricule, téléphone ou assurance..."
-              : "Rechercher par nom du médecin prescripteur ou patient..."
+              ? 'Rechercher par nom de patient, matricule, téléphone ou assurance...'
+              : 'Rechercher par référence, médecin prescripteur ou patient...'
           }
           className="w-full bg-transparent text-sm text-slate-100 placeholder-slate-500 focus:outline-none"
         />
@@ -301,25 +518,22 @@ export default function PatientsAndPrescriptions() {
                   <th className="py-3 px-4">ALLERGIES & PATHOLOGIES</th>
                   <th className="py-3 px-4">ASSURANCE / COUVERTURE</th>
                   <th className="py-3 px-4 text-center">FIDÉLITÉ</th>
+                  <th className="py-3 px-4 text-center">ACTIONS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
                 {filteredPatients.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-12 text-center text-slate-500">
+                    <td colSpan={8} className="py-12 text-center text-slate-500">
                       <p className="text-sm font-semibold text-slate-400">Aucun dossier patient enregistré</p>
-                      <p className="text-xs">Cliquez sur « + Nouveau Patient » pour ouvrir le premier dossier médical.</p>
+                      <p className="text-xs">Cliquez sur « Nouveau Patient » pour ouvrir le premier dossier médical.</p>
                     </td>
                   </tr>
                 ) : (
                   filteredPatients.map((pat) => (
                     <tr key={pat.id} className="hover:bg-slate-800/40 transition-colors">
-                      <td className="py-3.5 px-4 font-mono font-bold text-blue-400">
-                        {pat.code || 'PAT-0001'}
-                      </td>
-                      <td className="py-3.5 px-4 font-bold text-white">
-                        {pat.fullName}
-                      </td>
+                      <td className="py-3.5 px-4 font-mono font-bold text-blue-400">{pat.code || 'PAT-0001'}</td>
+                      <td className="py-3.5 px-4 font-bold text-white">{pat.fullName}</td>
                       <td className="py-3.5 px-4 text-slate-400">
                         <div>{pat.phone}</div>
                         <div className="text-[11px] text-slate-500">{pat.address}</div>
@@ -328,7 +542,7 @@ export default function PatientsAndPrescriptions() {
                         {pat.age} ans ({pat.gender === 'F' ? 'Femme' : 'Homme'})
                       </td>
                       <td className="py-3.5 px-4">
-                        <div className="text-rose-400 font-medium">⚠️ {pat.allergies || 'Néant'}</div>
+                        <div className="text-rose-400 font-medium">{pat.allergies || 'Néant'}</div>
                         <div className="text-[11px] text-slate-400">{pat.chronicConditions || 'Général'}</div>
                       </td>
                       <td className="py-3.5 px-4">
@@ -341,8 +555,26 @@ export default function PatientsAndPrescriptions() {
                       </td>
                       <td className="py-3.5 px-4 text-center">
                         <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono">
-                          ★ {pat.fidelityTier || 'SILVER'} ({pat.fidelityPoints || 50} pts)
+                          ★ {pat.fidelityTier || 'SILVER'} ({pat.fidelityPoints || 0} pts)
                         </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => openEditPatientModal(pat)}
+                            className="p-1.5 bg-amber-600/20 text-amber-400 border border-amber-500/30 rounded-lg hover:bg-amber-600 hover:text-white transition-colors cursor-pointer"
+                            title="Modifier dossier patient"
+                          >
+                            <Edit3 size={13} />
+                          </button>
+                          <button
+                            onClick={() => handleDeletePatient(pat)}
+                            className="p-1.5 bg-rose-600/20 text-rose-400 border border-rose-500/30 rounded-lg hover:bg-rose-600 hover:text-white transition-colors cursor-pointer"
+                            title="Supprimer dossier patient"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -366,38 +598,57 @@ export default function PatientsAndPrescriptions() {
                   <th className="py-3 px-4">SPÉCIALITÉS DÉLIVRÉES</th>
                   <th className="py-3 px-4">POSOLOGIE / INSTRUCTIONS</th>
                   <th className="py-3 px-4 text-center">STATUT DÉLIVRANCE</th>
+                  <th className="py-3 px-4 text-center">ACTIONS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
                 {filteredRx.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-12 text-center text-slate-500">
+                    <td colSpan={7} className="py-12 text-center text-slate-500">
                       <p className="text-sm font-semibold text-slate-400">Aucune ordonnance enregistrée</p>
-                      <p className="text-xs">Utilisez le bouton « + Enregistrer Ordonnance » pour archiver une prescription médicale.</p>
+                      <p className="text-xs">Utilisez le bouton « Enregistrer Ordonnance » pour archiver une prescription médicale.</p>
                     </td>
                   </tr>
                 ) : (
-                  filteredRx.map((rx: any) => (
+                  filteredRx.map((rx) => (
                     <tr key={rx.id} className="hover:bg-slate-800/40 transition-colors">
-                      <td className="py-3 px-4 font-mono font-bold text-blue-400">
-                        {rx.rxCode || 'ORD-0001'}
-                      </td>
-                      <td className="py-3 px-4 font-bold text-white">
-                        {rx.patientName}
-                      </td>
-                      <td className="py-3 px-4 text-slate-300">
-                        {rx.doctorName}
-                      </td>
+                      <td className="py-3 px-4 font-mono font-bold text-blue-400">{rx.rxCode || 'ORD-0001'}</td>
+                      <td className="py-3 px-4 font-bold text-white">{rx.patientName}</td>
+                      <td className="py-3 px-4 text-slate-300">{rx.doctorName}</td>
                       <td className="py-3 px-4 text-emerald-400 font-medium">
                         {Array.isArray(rx.prescribedMedicines) ? rx.prescribedMedicines.join(', ') : rx.prescribedMedicines}
                       </td>
-                      <td className="py-3 px-4 text-slate-400">
-                        {rx.notes || 'Respecter les heures de prise'}
+                      <td className="py-3 px-4 text-slate-400">{rx.notes || 'Respecter les heures de prise'}</td>
+                      <td className="py-3 px-4 text-center">
+                        <span
+                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-bold border ${
+                            rx.status === 'DELIVRE'
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                              : rx.status === 'PARTIEL'
+                              ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                              : 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+                          }`}
+                        >
+                          <CheckCircle size={12} /> {rx.status || 'DELIVRE'}
+                        </span>
                       </td>
                       <td className="py-3 px-4 text-center">
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                          <CheckCircle size={12} /> DÉLIVRÉ CONFORME
-                        </span>
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => openEditRxModal(rx)}
+                            className="p-1.5 bg-amber-600/20 text-amber-400 border border-amber-500/30 rounded-lg hover:bg-amber-600 hover:text-white transition-colors cursor-pointer"
+                            title="Modifier ordonnance"
+                          >
+                            <Edit3 size={13} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteRx(rx)}
+                            className="p-1.5 bg-rose-600/20 text-rose-400 border border-rose-500/30 rounded-lg hover:bg-rose-600 hover:text-white transition-colors cursor-pointer"
+                            title="Supprimer ordonnance"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -408,13 +659,16 @@ export default function PatientsAndPrescriptions() {
         </div>
       )}
 
-      {/* Modal 1: New Patient */}
+      {/* Modal 1: Create / Edit Patient */}
       <Modal
         isOpen={isPatientModalOpen}
-        onClose={() => setIsPatientModalOpen(false)}
-        title="Création du Dossier Médical Patient"
+        onClose={() => {
+          setIsPatientModalOpen(false);
+          setEditingPatient(null);
+        }}
+        title={editingPatient ? `Modifier Dossier ${editingPatient.code}` : 'Création du Dossier Médical Patient'}
       >
-        <div className="space-y-3.5 text-xs">
+        <div className="space-y-3 text-xs">
           <div>
             <label className="block text-slate-300 font-semibold mb-1">Nom Complet du Patient</label>
             <input
@@ -427,7 +681,7 @@ export default function PatientsAndPrescriptions() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="block text-slate-300 font-semibold mb-1">Téléphone</label>
               <input
@@ -446,17 +700,50 @@ export default function PatientsAndPrescriptions() {
                 className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono focus:border-blue-500 focus:outline-none"
               />
             </div>
+            <div>
+              <label className="block text-slate-300 font-semibold mb-1">Genre</label>
+              <select
+                value={pGender}
+                onChange={(e) => setPGender(e.target.value as 'M' | 'F')}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-blue-500 focus:outline-none cursor-pointer"
+              >
+                <option value="M">Homme (M)</option>
+                <option value="F">Femme (F)</option>
+              </select>
+            </div>
           </div>
 
           <div>
-            <label className="block text-slate-300 font-semibold mb-1">Allergies Connues (Alerte Risque)</label>
+            <label className="block text-slate-300 font-semibold mb-1">Adresse / Commune</label>
             <input
               type="text"
-              placeholder="Ex: Allergie Pénicilline, Sulfamides..."
-              value={pAllergies}
-              onChange={(e) => setPAllergies(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-950 border border-rose-500/50 rounded-lg text-rose-300 focus:border-rose-500 focus:outline-none"
+              value={pAddress}
+              onChange={(e) => setPAddress(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-blue-500 focus:outline-none"
             />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-slate-300 font-semibold mb-1">Allergies Connues</label>
+              <input
+                type="text"
+                placeholder="Ex: Pénicilline, Sulfamides..."
+                value={pAllergies}
+                onChange={(e) => setPAllergies(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-950 border border-rose-500/50 rounded-lg text-rose-300 focus:border-rose-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-slate-300 font-semibold mb-1">Pathologies Chroniques</label>
+              <input
+                type="text"
+                placeholder="Ex: Hypertension, Diabète..."
+                value={pConditions}
+                onChange={(e) => setPConditions(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-blue-500 focus:outline-none"
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -486,20 +773,57 @@ export default function PatientsAndPrescriptions() {
             </div>
           </div>
 
+          {editingPatient && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Points Fidélité</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={pFidelityPoints}
+                  onChange={(e) => setPFidelityPoints(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-amber-300 font-mono focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Palier Fidélité</label>
+                <select
+                  value={pFidelityTier}
+                  onChange={(e) => setPFidelityTier(e.target.value as any)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-blue-500 focus:outline-none cursor-pointer"
+                >
+                  <option value="BRONZE">BRONZE</option>
+                  <option value="SILVER">SILVER</option>
+                  <option value="GOLD">GOLD</option>
+                  <option value="PLATINUM">PLATINUM</option>
+                </select>
+              </div>
+            </div>
+          )}
+
           <button
-            onClick={handleCreatePatient}
-            className="w-full mt-2 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
+            onClick={handleSavePatient}
+            disabled={isSubmitting}
+            className="w-full mt-2 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
           >
-            <HeartPulse size={16} /> Enregistrer le Patient & Carte Fidélité
+            <HeartPulse size={16} />
+            {isSubmitting
+              ? 'Enregistrement...'
+              : editingPatient
+              ? 'Mettre à Jour le Dossier Patient'
+              : 'Enregistrer le Patient & Carte Fidélité'}
           </button>
         </div>
       </Modal>
 
-      {/* Modal 2: New Prescription */}
+      {/* Modal 2: Create / Edit Prescription */}
       <Modal
         isOpen={isRxModalOpen}
-        onClose={() => setIsRxModalOpen(false)}
-        title="Enregistrement d'une Ordonnance Médicale"
+        onClose={() => {
+          setIsRxModalOpen(false);
+          setEditingRx(null);
+        }}
+        title={editingRx ? `Modifier Ordonnance ${editingRx.rxCode || ''}` : "Enregistrement d'une Ordonnance Médicale"}
       >
         <div className="space-y-3.5 text-xs">
           <div>
@@ -509,20 +833,50 @@ export default function PatientsAndPrescriptions() {
               onChange={(e) => setRxPatientId(e.target.value)}
               className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-blue-500 focus:outline-none cursor-pointer"
             >
-              {patients.map(p => (
-                <option key={p.id} value={p.id}>{p.code} - {p.fullName} ({p.insuranceName})</option>
+              {patients.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.code} - {p.fullName} ({p.insuranceName})
+                </option>
               ))}
+              <option value="__WALKIN__">Patient de passage / Saisie libre</option>
             </select>
           </div>
 
-          <div>
-            <label className="block text-slate-300 font-semibold mb-1">Médecin Prescripteur / Établissement</label>
-            <input
-              type="text"
-              value={rxDoctor}
-              onChange={(e) => setRxDoctor(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-blue-500 focus:outline-none"
-            />
+          {rxPatientId === '__WALKIN__' && (
+            <div>
+              <label className="block text-slate-300 font-semibold mb-1">Nom du Patient de Passage</label>
+              <input
+                type="text"
+                value={rxWalkInName}
+                onChange={(e) => setRxWalkInName(e.target.value)}
+                placeholder="Ex: Mme. Béatrice Lunda"
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-blue-500 focus:outline-none"
+              />
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-slate-300 font-semibold mb-1">Médecin Prescripteur</label>
+              <input
+                type="text"
+                value={rxDoctor}
+                onChange={(e) => setRxDoctor(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-blue-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-slate-300 font-semibold mb-1">Statut Délivrance</label>
+              <select
+                value={rxStatus}
+                onChange={(e) => setRxStatus(e.target.value as any)}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-blue-500 focus:outline-none cursor-pointer"
+              >
+                <option value="EN_ATTENTE">EN ATTENTE</option>
+                <option value="PARTIEL">PARTIEL</option>
+                <option value="DELIVRE">DÉLIVRÉ</option>
+              </select>
+            </div>
           </div>
 
           <div>
@@ -547,10 +901,16 @@ export default function PatientsAndPrescriptions() {
           </div>
 
           <button
-            onClick={handleCreatePrescription}
-            className="w-full mt-2 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
+            onClick={handleSavePrescription}
+            disabled={isSubmitting}
+            className="w-full mt-2 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
           >
-            <CheckCircle size={16} /> Valider la Délivrance Ordonnance
+            <CheckCircle size={16} />
+            {isSubmitting
+              ? 'Enregistrement...'
+              : editingRx
+              ? "Mettre à Jour l'Ordonnance"
+              : 'Valider la Délivrance Ordonnance'}
           </button>
         </div>
       </Modal>

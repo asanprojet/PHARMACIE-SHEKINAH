@@ -1,20 +1,30 @@
 import { useEffect, useState } from 'react';
-import { db, auth } from './firebase';
-import { collection, onSnapshot, query, orderBy, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { 
-  Clock, 
-  AlertTriangle, 
-  Calendar, 
-  Plus, 
-  Search, 
-  Filter, 
-  ShieldAlert, 
-  CheckCircle, 
-  Trash2, 
-  Layers,
-  ArrowRight
+import { db } from './firebase';
+import {
+  collection,
+  onSnapshot,
+  query,
+  orderBy,
+  addDoc,
+  doc,
+  updateDoc,
+  deleteDoc,
+  serverTimestamp,
+} from 'firebase/firestore';
+import {
+  Clock,
+  AlertTriangle,
+  Plus,
+  Search,
+  ShieldAlert,
+  CheckCircle,
+  Trash2,
+  Edit3,
 } from 'lucide-react';
 import Modal from './Modal';
+import { useAuth } from './AuthContext';
+import { useToast } from './ToastContext';
+import { OperationType, handleFirestoreError, formatReadableError } from './firestoreUtils';
 
 interface LotRecord {
   id: string;
@@ -30,47 +40,74 @@ interface LotRecord {
 }
 
 export default function ExpiryManagement() {
+  const { authReady, firebaseUser, currentUser } = useAuth();
+  const { showToast, confirmAction } = useToast();
+  const siteId = currentUser?.siteId || 'site1';
+
   const [lots, setLots] = useState<LotRecord[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [filterLevel, setFilterLevel] = useState<'ALL' | 'EXP_30' | 'EXP_60' | 'EXP_90' | 'EXPIRED'>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
-  const [siteId] = useState('site1');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Modal State
+  // Create / Edit Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingLot, setEditingLot] = useState<LotRecord | null>(null);
   const [selectedProductId, setSelectedProductId] = useState('');
   const [newLotNumber, setNewLotNumber] = useState('');
   const [newExpiryDate, setNewExpiryDate] = useState('');
   const [newQuantity, setNewQuantity] = useState('50');
   const [newLocation, setNewLocation] = useState('Rayon A - Étagère 2');
+  const [newStatus, setNewStatus] = useState<'DISPONIBLE' | 'QUARANTAINE' | 'DETRUIT'>('DISPONIBLE');
 
   useEffect(() => {
-    // 1. Fetch lots
+    if (!authReady || !firebaseUser) return;
+
     const lotsRef = collection(db, 'sites', siteId, 'lots');
     const qLots = query(lotsRef, orderBy('expiryDate', 'asc'));
-    const unsubsLots = onSnapshot(qLots, (snap) => {
-      setLots(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-    });
+    const unsubsLots = onSnapshot(
+      qLots,
+      (snap) => {
+        setLots(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
+      },
+      (err) => {
+        showToast(formatReadableError(err), 'error');
+        try {
+          handleFirestoreError(err, OperationType.LIST, `sites/${siteId}/lots`);
+        } catch {
+          // logged
+        }
+      }
+    );
 
-    // 2. Fetch inventory for references
     const invRef = collection(db, 'sites', siteId, 'inventory');
-    const unsubsInv = onSnapshot(invRef, (snap) => {
-      setProducts(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-    });
+    const unsubsInv = onSnapshot(
+      invRef,
+      (snap) => {
+        setProducts(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
+      },
+      (err) => {
+        showToast(formatReadableError(err), 'error');
+        try {
+          handleFirestoreError(err, OperationType.LIST, `sites/${siteId}/inventory`);
+        } catch {
+          // logged
+        }
+      }
+    );
 
     return () => {
       unsubsLots();
       unsubsInv();
     };
-  }, [siteId]);
+  }, [authReady, firebaseUser, siteId, showToast]);
 
   const logAction = async (action: string) => {
-    if (!auth.currentUser) return;
     try {
       await addDoc(collection(db, 'sites', siteId, 'auditlogs'), {
-        userId: auth.currentUser.email || auth.currentUser.uid,
+        userId: currentUser?.email || firebaseUser?.email || 'Pharmacien',
         action,
-        timestamp: serverTimestamp()
+        timestamp: serverTimestamp(),
       });
     } catch (e) {
       console.warn('Audit log error:', e);
@@ -93,46 +130,144 @@ export default function ExpiryManagement() {
   };
 
   const handleQuarantine = async (lot: LotRecord) => {
-    const newStatus = lot.quarantineStatus === 'QUARANTAINE' ? 'DISPONIBLE' : 'QUARANTAINE';
-    await updateDoc(doc(db, 'sites', siteId, 'lots', lot.id), {
-      quarantineStatus: newStatus,
-      updatedAt: serverTimestamp()
-    });
-    await logAction(`Gestion Lots: Lot ${lot.lotNumber || lot.id} (${lot.productName}) passé en statut ${newStatus}`);
+    const newStatusVal = lot.quarantineStatus === 'QUARANTAINE' ? 'DISPONIBLE' : 'QUARANTAINE';
+    const path = `sites/${siteId}/lots/${lot.id}`;
+    try {
+      await updateDoc(doc(db, 'sites', siteId, 'lots', lot.id), {
+        quarantineStatus: newStatusVal,
+        updatedAt: serverTimestamp(),
+      });
+      await logAction(`Gestion Lots: Lot ${lot.lotNumber || lot.id} (${lot.productName}) passé en statut ${newStatusVal}`);
+      showToast(`Lot ${lot.lotNumber || lot.id} → ${newStatusVal}`, 'info');
+    } catch (err) {
+      showToast(formatReadableError(err), 'error');
+      try {
+        handleFirestoreError(err, OperationType.UPDATE, path);
+      } catch {
+        // logged
+      }
+    }
   };
 
-  const handleCreateLot = async () => {
-    const prod = products.find(p => p.id === selectedProductId) || products[0];
-    if (!prod || !newLotNumber || !newExpiryDate) {
-      alert('Veuillez renseigner le numéro de lot et la date de péremption.');
+  const openNewLotModal = () => {
+    setEditingLot(null);
+    setSelectedProductId(products.length > 0 ? products[0].id : '');
+    setNewLotNumber(`LT-${new Date().getFullYear().toString().slice(-2)}${Date.now().toString().slice(-3)}`);
+    setNewExpiryDate(new Date(Date.now() + 180 * 24 * 3600 * 1000).toISOString().split('T')[0]);
+    setNewQuantity('50');
+    setNewLocation('Rayon A - Étagère 2');
+    setNewStatus('DISPONIBLE');
+    setIsModalOpen(true);
+  };
+
+  const openEditLotModal = (lot: LotRecord) => {
+    setEditingLot(lot);
+    setSelectedProductId(lot.productId || (products[0]?.id ?? ''));
+    setNewLotNumber(lot.lotNumber || '');
+    setNewExpiryDate(lot.expiryDate || '');
+    setNewQuantity(String(lot.quantity ?? 0));
+    setNewLocation(lot.storageLocation || 'Magasin Central');
+    setNewStatus(lot.quarantineStatus || 'DISPONIBLE');
+    setIsModalOpen(true);
+  };
+
+  const handleSaveLot = async () => {
+    const prod = products.find((p) => p.id === selectedProductId) || products[0];
+    if (!newLotNumber.trim() || !newExpiryDate) {
+      showToast('Veuillez renseigner le numéro de lot et la date de péremption.', 'error');
+      return;
+    }
+    if (!editingLot && !prod) {
+      showToast('Veuillez créer au moins un médicament dans le catalogue Stock [F3].', 'error');
       return;
     }
 
-    const qty = parseInt(newQuantity, 10) || 50;
+    const qty = Math.max(0, parseInt(newQuantity, 10) || 0);
+    setIsSubmitting(true);
 
-    await addDoc(collection(db, 'sites', siteId, 'lots'), {
-      productId: prod.id,
-      productName: prod.name,
-      lotNumber: newLotNumber.toUpperCase(),
-      expiryDate: newExpiryDate,
-      quantity: qty,
-      initialQuantity: qty,
-      storageLocation: newLocation,
-      quarantineStatus: 'DISPONIBLE',
-      createdAt: serverTimestamp()
-    });
+    try {
+      if (editingLot) {
+        const path = `sites/${siteId}/lots/${editingLot.id}`;
+        await updateDoc(doc(db, 'sites', siteId, 'lots', editingLot.id), {
+          productId: prod ? prod.id : editingLot.productId,
+          productName: prod ? prod.name : editingLot.productName,
+          lotNumber: newLotNumber.trim().toUpperCase(),
+          expiryDate: newExpiryDate,
+          quantity: qty,
+          storageLocation: newLocation.trim() || 'Magasin Central',
+          quarantineStatus: newStatus,
+          updatedAt: serverTimestamp(),
+        });
+        await logAction(
+          `Modification Lot: ${newLotNumber.toUpperCase()} (${prod?.name || editingLot.productName}) - ${qty} u, Exp: ${newExpiryDate}, ${newStatus}`
+        );
+        showToast('Lot mis à jour.', 'success');
+      } else {
+        await addDoc(collection(db, 'sites', siteId, 'lots'), {
+          productId: prod.id,
+          productName: prod.name,
+          lotNumber: newLotNumber.trim().toUpperCase(),
+          expiryDate: newExpiryDate,
+          quantity: qty,
+          initialQuantity: qty,
+          storageLocation: newLocation.trim() || 'Magasin Central',
+          quarantineStatus: newStatus,
+          createdAt: serverTimestamp(),
+        });
+        await logAction(`Création Lot: ${newLotNumber.toUpperCase()} pour ${prod.name} (${qty} unités, Exp: ${newExpiryDate})`);
+        showToast(`Lot ${newLotNumber.toUpperCase()} enregistré.`, 'success');
+      }
 
-    await logAction(`Création Lot: ${newLotNumber} pour ${prod.name} (${qty} unités, Exp: ${newExpiryDate})`);
-    setIsModalOpen(false);
-    setNewLotNumber('');
-    setNewExpiryDate('');
+      setIsModalOpen(false);
+      setEditingLot(null);
+      setNewLotNumber('');
+      setNewExpiryDate('');
+    } catch (err) {
+      showToast(formatReadableError(err), 'error');
+      try {
+        handleFirestoreError(
+          err,
+          editingLot ? OperationType.UPDATE : OperationType.CREATE,
+          editingLot ? `sites/${siteId}/lots/${editingLot.id}` : `sites/${siteId}/lots`
+        );
+      } catch {
+        // logged
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const filteredLots = lots.filter(lot => {
+  const handleDeleteLot = async (lot: LotRecord) => {
+    const confirmed = await confirmAction({
+      title: 'Supprimer ce lot de traçabilité ?',
+      message: `Voulez-vous supprimer le lot ${lot.lotNumber || lot.id} (${lot.productName}) ?`,
+      confirmLabel: 'Supprimer le lot',
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    const path = `sites/${siteId}/lots/${lot.id}`;
+    try {
+      await deleteDoc(doc(db, 'sites', siteId, 'lots', lot.id));
+      await logAction(`Suppression Lot: ${lot.lotNumber || lot.id} (${lot.productName})`);
+      showToast('Lot supprimé du registre.', 'info');
+    } catch (err) {
+      showToast(formatReadableError(err), 'error');
+      try {
+        handleFirestoreError(err, OperationType.DELETE, path);
+      } catch {
+        // logged
+      }
+    }
+  };
+
+  const filteredLots = lots.filter((lot) => {
     const days = getDaysUntilExpiry(lot.expiryDate);
-    const matchesSearch = 
+    const matchesSearch =
       lot.productName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       lot.lotNumber?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      lot.storageLocation?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       lot.id?.toLowerCase().includes(searchTerm.toLowerCase());
 
     let matchesFilter = true;
@@ -144,9 +279,15 @@ export default function ExpiryManagement() {
     return matchesSearch && matchesFilter;
   });
 
-  const expiredCount = lots.filter(l => getDaysUntilExpiry(l.expiryDate) < 0).length;
-  const under30Count = lots.filter(l => { const d = getDaysUntilExpiry(l.expiryDate); return d >= 0 && d <= 30; }).length;
-  const under90Count = lots.filter(l => { const d = getDaysUntilExpiry(l.expiryDate); return d >= 0 && d <= 90; }).length;
+  const expiredCount = lots.filter((l) => getDaysUntilExpiry(l.expiryDate) < 0).length;
+  const under30Count = lots.filter((l) => {
+    const d = getDaysUntilExpiry(l.expiryDate);
+    return d >= 0 && d <= 30;
+  }).length;
+  const under90Count = lots.filter((l) => {
+    const d = getDaysUntilExpiry(l.expiryDate);
+    return d >= 0 && d <= 90;
+  }).length;
 
   return (
     <div className="p-6 bg-[#070b14] text-slate-100 min-h-screen font-sans space-y-6 select-none">
@@ -163,13 +304,10 @@ export default function ExpiryManagement() {
 
         <div className="flex items-center gap-3">
           <button
-            onClick={() => {
-              if (products.length > 0) setSelectedProductId(products[0].id);
-              setIsModalOpen(true);
-            }}
+            onClick={openNewLotModal}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm"
           >
-            <Plus size={15} /> + Enregistrer un Nouveau Lot
+            <Plus size={15} /> Enregistrer un Nouveau Lot
           </button>
         </div>
       </div>
@@ -299,31 +437,28 @@ export default function ExpiryManagement() {
                   const days = getDaysUntilExpiry(lot.expiryDate);
                   const sev = getExpirySeverity(days);
                   const isQuarantine = lot.quarantineStatus === 'QUARANTAINE';
+                  const isDestroyed = lot.quarantineStatus === 'DETRUIT';
 
                   return (
                     <tr key={lot.id} className="hover:bg-slate-800/40 transition-colors">
-                      <td className="py-3 px-4 font-mono font-bold text-blue-400">
-                        {lot.lotNumber || lot.id}
-                      </td>
-                      <td className="py-3 px-4 font-semibold text-white">
-                        {lot.productName || lot.productId}
-                      </td>
-                      <td className="py-3 px-4 text-slate-400">
-                        {lot.storageLocation || 'Magasin Central'}
-                      </td>
+                      <td className="py-3 px-4 font-mono font-bold text-blue-400">{lot.lotNumber || lot.id}</td>
+                      <td className="py-3 px-4 font-semibold text-white">{lot.productName || lot.productId}</td>
+                      <td className="py-3 px-4 text-slate-400">{lot.storageLocation || 'Magasin Central'}</td>
                       <td className="py-3 px-4 text-center font-mono font-bold text-white tabular-nums">
                         {lot.quantity} unités
                       </td>
-                      <td className="py-3 px-4 font-mono text-slate-200">
-                        {lot.expiryDate}
-                      </td>
+                      <td className="py-3 px-4 font-mono text-slate-200">{lot.expiryDate}</td>
                       <td className="py-3 px-4 text-center">
                         <span className={`inline-block px-2.5 py-0.5 rounded text-[10px] font-bold border ${sev.color}`}>
                           {sev.label}
                         </span>
                       </td>
                       <td className="py-3 px-4 text-center">
-                        {isQuarantine ? (
+                        {isDestroyed ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                            DÉTRUIT / RETIRÉ
+                          </span>
+                        ) : isQuarantine ? (
                           <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-400 border border-purple-500/30">
                             EN QUARANTAINE
                           </span>
@@ -334,16 +469,32 @@ export default function ExpiryManagement() {
                         )}
                       </td>
                       <td className="py-3 px-4 text-center">
-                        <button
-                          onClick={() => handleQuarantine(lot)}
-                          className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer border ${
-                            isQuarantine 
-                              ? 'bg-emerald-600/20 border-emerald-500/30 text-emerald-400 hover:bg-emerald-600 hover:text-white'
-                              : 'bg-rose-600/20 border-rose-500/30 text-rose-400 hover:bg-rose-600 hover:text-white'
-                          }`}
-                        >
-                          {isQuarantine ? 'Libérer Quarantaine' : 'Mettre en Quarantaine'}
-                        </button>
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => handleQuarantine(lot)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer border ${
+                              isQuarantine
+                                ? 'bg-emerald-600/20 border-emerald-500/30 text-emerald-400 hover:bg-emerald-600 hover:text-white'
+                                : 'bg-purple-600/20 border-purple-500/30 text-purple-300 hover:bg-purple-600 hover:text-white'
+                            }`}
+                          >
+                            {isQuarantine ? 'Libérer' : 'Quarantaine'}
+                          </button>
+                          <button
+                            onClick={() => openEditLotModal(lot)}
+                            className="p-1.5 bg-amber-600/20 text-amber-400 border border-amber-500/30 rounded-lg hover:bg-amber-600 hover:text-white transition-colors cursor-pointer"
+                            title="Modifier ce lot"
+                          >
+                            <Edit3 size={13} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteLot(lot)}
+                            className="p-1.5 bg-rose-600/20 text-rose-400 border border-rose-500/30 rounded-lg hover:bg-rose-600 hover:text-white transition-colors cursor-pointer"
+                            title="Supprimer ce lot"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -354,11 +505,14 @@ export default function ExpiryManagement() {
         </div>
       </div>
 
-      {/* Modal New Lot */}
+      {/* Modal Create / Edit Lot */}
       <Modal
         isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title="Enregistrement d'un Nouveau Lot de Médicament"
+        onClose={() => {
+          setIsModalOpen(false);
+          setEditingLot(null);
+        }}
+        title={editingLot ? `Modifier Lot ${editingLot.lotNumber || editingLot.id}` : "Enregistrement d'un Nouveau Lot de Médicament"}
       >
         <div className="space-y-3.5 text-xs">
           <div>
@@ -368,8 +522,10 @@ export default function ExpiryManagement() {
               onChange={(e) => setSelectedProductId(e.target.value)}
               className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-blue-500 focus:outline-none cursor-pointer"
             >
-              {products.map(p => (
-                <option key={p.id} value={p.id}>{p.code} - {p.name}</option>
+              {products.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.code} - {p.name}
+                </option>
               ))}
             </select>
           </div>
@@ -397,19 +553,19 @@ export default function ExpiryManagement() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-slate-300 font-semibold mb-1">Quantité Reçue (Unités)</label>
+              <label className="block text-slate-300 font-semibold mb-1">Quantité (Unités)</label>
               <input
                 type="number"
-                min="1"
+                min="0"
                 value={newQuantity}
                 onChange={(e) => setNewQuantity(e.target.value)}
                 className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono focus:border-blue-500 focus:outline-none"
               />
             </div>
             <div>
-              <label className="block text-slate-300 font-semibold mb-1">Emplacement Rayonnage</label>
+              <label className="block text-slate-300 font-semibold mb-1">Emplacement</label>
               <input
                 type="text"
                 value={newLocation}
@@ -417,13 +573,31 @@ export default function ExpiryManagement() {
                 className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-blue-500 focus:outline-none"
               />
             </div>
+            <div>
+              <label className="block text-slate-300 font-semibold mb-1">Statut Lot</label>
+              <select
+                value={newStatus}
+                onChange={(e) => setNewStatus(e.target.value as any)}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:border-blue-500 focus:outline-none cursor-pointer"
+              >
+                <option value="DISPONIBLE">DISPONIBLE</option>
+                <option value="QUARANTAINE">QUARANTAINE</option>
+                <option value="DETRUIT">DÉTRUIT</option>
+              </select>
+            </div>
           </div>
 
           <button
-            onClick={handleCreateLot}
-            className="w-full mt-2 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
+            onClick={handleSaveLot}
+            disabled={isSubmitting}
+            className="w-full mt-2 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
           >
-            <CheckCircle size={16} /> Valider la Traçabilité du Lot
+            <CheckCircle size={16} />
+            {isSubmitting
+              ? 'Enregistrement...'
+              : editingLot
+              ? 'Enregistrer les Modifications du Lot'
+              : 'Valider la Traçabilité du Lot'}
           </button>
         </div>
       </Modal>

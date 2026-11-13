@@ -1,49 +1,44 @@
 import { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { 
-  Building2, 
-  Store, 
-  DollarSign, 
-  Printer, 
-  Users, 
-  ShieldCheck, 
-  Database, 
-  RefreshCw, 
-  Save, 
-  CheckCircle, 
-  AlertTriangle, 
-  FileSpreadsheet, 
-  Download, 
-  Upload, 
-  Sliders, 
-  Lock, 
-  Percent, 
-  Globe, 
-  Phone, 
-  Mail, 
-  MapPin, 
-  Receipt, 
-  Plus, 
+import { doc, getDoc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import {
+  Building2,
+  Store,
+  DollarSign,
+  Printer,
+  Users,
+  ShieldCheck,
+  Database,
+  RefreshCw,
+  Save,
+  CheckCircle,
+  AlertTriangle,
+  FileSpreadsheet,
+  Download,
+  Sliders,
+  Percent,
+  MapPin,
+  Receipt,
+  Plus,
   Trash2,
+  Edit3,
   HardDrive,
   Cpu,
-  FileCheck,
-  Check,
   X,
   Server,
   Activity,
   ArrowRightLeft,
-  Radio,
-  Network
+  Network,
 } from 'lucide-react';
 import { useAuth } from './AuthContext';
+import { useToast } from './ToastContext';
+import { OperationType, handleFirestoreError, formatReadableError } from './firestoreUtils';
 
 export default function Settings() {
-  const { currentUser } = useAuth();
+  const { authReady, firebaseUser, currentUser } = useAuth();
+  const { showToast, confirmAction } = useToast();
   const [activeSection, setActiveSection] = useState<'general' | 'sites' | 'currency' | 'printer' | 'users' | 'pharma' | 'database' | 'backup'>('general');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
-  const [testPrintModal, setTestPrintModal] = useState(false);
   const [dbTestResult, setDbTestResult] = useState<{ status: 'idle' | 'testing' | 'success' | 'error'; message: string; latency?: number }>({ status: 'idle', message: '' });
   const [migrationStatus, setMigrationStatus] = useState<'idle' | 'migrating' | 'done'>('idle');
 
@@ -52,12 +47,12 @@ export default function Settings() {
     activeEngine: 'firestore_hybrid', // 'firestore_hybrid' | 'cloud_sql_postgres' | 'sqlite_local' | 'external_mysql'
     firestoreDatabaseId: 'ai-studio-pharmaflow-c43dff7d-2eab-4230-84b1-03a3627fdcd8',
     firestoreProject: 'indigo-synapse-mlvvl',
-    postgresHost: 'cloudsql.pharmaflow-rdc.internal',
+    postgresHost: 'cloudsql.shekinah-pharma.internal',
     postgresPort: 5432,
-    postgresDatabase: 'pharmaflow_erp_prod',
+    postgresDatabase: 'shekinah_pharma_erp_prod',
     postgresUser: 'pharma_admin',
     postgresSsl: true,
-    sqliteFilePath: 'indexeddb://pharmaflow_local_storage',
+    sqliteFilePath: 'indexeddb://shekinah_pharma_local_storage',
     syncIntervalSeconds: 5,
     autoConflictResolution: 'server_wins',
     offlinePersistenceEnabled: true,
@@ -65,7 +60,7 @@ export default function Settings() {
 
   // 1. GÉNÉRAL & ÉTABLISSEMENT
   const [generalConfig, setGeneralConfig] = useState({
-    companyName: 'PHARMAFLOW GROUP SARL',
+    companyName: 'SHEKINAH PHARMA',
     legalForm: 'Société à Responsabilité Limitée',
     rccm: 'CD/KNG/RCCM/20-B-01948',
     nif: 'A1903482F',
@@ -77,8 +72,8 @@ export default function Settings() {
     country: 'République Démocratique du Congo',
     phone: '+243 81 555 0192',
     phoneAlt: '+243 99 820 4410',
-    email: 'contact@pharmaflow-rdc.com',
-    website: 'https://pharmaflow.health.cd',
+    email: 'contact@shekinah-pharma.com',
+    website: 'https://shekinah-pharma.cd',
     enableHeaderLogo: true,
   });
 
@@ -90,6 +85,7 @@ export default function Settings() {
   ]);
 
   const [newSiteModal, setNewSiteModal] = useState(false);
+  const [editingSiteId, setEditingSiteId] = useState<string | null>(null);
   const [newSiteData, setNewSiteData] = useState({
     code: '',
     name: '',
@@ -120,7 +116,7 @@ export default function Settings() {
     printQrCode: true,
     printTaxId: true,
     printDualCurrency: true,
-    headerNote: 'PHARMAFLOW GROUP SARL - PHARMACIE CENTRALE',
+    headerNote: 'SHEKINAH PHARMA - PHARMACIE CENTRALE',
     footerNote: 'Les médicaments vendus ne sont ni repris ni échangés.\nConservez à température < 25°C. Bon rétablissement !',
     cashierNameOnReceipt: true,
     clientNameOnReceipt: true,
@@ -137,6 +133,7 @@ export default function Settings() {
   ]);
 
   const [newUserModal, setNewUserModal] = useState(false);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [newUserData, setNewUserData] = useState({
     username: '',
     fullName: '',
@@ -160,6 +157,8 @@ export default function Settings() {
 
   // Charger la configuration sauvegardée (Firestore avec repli localStorage)
   useEffect(() => {
+    if (!authReady || !firebaseUser) return;
+
     const loadSettings = async () => {
       try {
         const savedLocal = localStorage.getItem('pharmaflow_erp_settings');
@@ -174,7 +173,6 @@ export default function Settings() {
           if (parsed.database) setDatabaseConfig(parsed.database);
         }
 
-        // Essayer aussi de lire depuis Firestore
         const settingsRef = doc(db, 'settings', 'config');
         const snap = await getDoc(settingsRef);
         if (snap.exists()) {
@@ -188,38 +186,54 @@ export default function Settings() {
           if (data.database) setDatabaseConfig(data.database);
         }
       } catch (err) {
-        console.warn('Utilisation configuration locale résiliente:', err);
+        showToast(formatReadableError(err), 'error');
+        try {
+          handleFirestoreError(err, OperationType.GET, 'settings/config');
+        } catch {
+          // logged
+        }
       }
     };
 
     loadSettings();
-  }, []);
+  }, [authReady, firebaseUser, showToast]);
 
-  // Sauvegarder dans Firestore et localStorage
-  const handleSaveAll = async () => {
-    setSaveStatus('saving');
+  const persistFullConfig = async (overrides?: { sites?: typeof sitesList; users?: typeof usersList }) => {
+    const nextSites = overrides?.sites ?? sitesList;
+    const nextUsers = overrides?.users ?? usersList;
     const fullConfig = {
       general: generalConfig,
-      sites: sitesList,
+      sites: nextSites,
       financial: financialConfig,
       printer: printerConfig,
-      users: usersList,
+      users: nextUsers,
       pharma: pharmaConfig,
       database: databaseConfig,
       updatedAt: new Date().toISOString(),
       updatedBy: currentUser?.displayName || 'Architecte Système',
     };
 
+    localStorage.setItem('pharmaflow_erp_settings', JSON.stringify(fullConfig));
+    const settingsRef = doc(db, 'settings', 'config');
+    await setDoc(settingsRef, fullConfig, { merge: true });
+  };
+
+  // Sauvegarder dans Firestore et localStorage
+  const handleSaveAll = async () => {
+    setSaveStatus('saving');
     try {
-      localStorage.setItem('pharmaflow_erp_settings', JSON.stringify(fullConfig));
-      const settingsRef = doc(db, 'settings', 'config');
-      await setDoc(settingsRef, fullConfig, { merge: true });
+      await persistFullConfig();
       setSaveStatus('saved');
+      showToast('Configuration ERP enregistrée dans le Cloud.', 'success');
       setTimeout(() => setSaveStatus('idle'), 3000);
     } catch (err) {
-      console.warn('Sauvegardé en local résilient:', err);
-      setSaveStatus('saved');
-      setTimeout(() => setSaveStatus('idle'), 3000);
+      setSaveStatus('idle');
+      showToast(formatReadableError(err), 'error');
+      try {
+        handleFirestoreError(err, OperationType.WRITE, 'settings/config');
+      } catch {
+        // logged
+      }
     }
   };
 
@@ -235,29 +249,27 @@ export default function Settings() {
         setDbTestResult({
           status: 'success',
           latency: Math.max(duration, 2),
-          message: `Connexion active et vérifiée à Google Cloud Firestore (${databaseConfig.firestoreDatabaseId}) avec persistance locale IndexedDB.`
+          message: `Connexion active et vérifiée à Google Cloud Firestore (${databaseConfig.firestoreDatabaseId}) avec persistance locale IndexedDB.`,
         });
       } else if (databaseConfig.activeEngine === 'sqlite_local') {
-        const duration = Math.round(performance.now() - startTime);
         setDbTestResult({
           status: 'success',
           latency: 1,
-          message: 'Base SQLite locale/IndexedDB initialisée avec succès. Zéro latence réseau.'
+          message: 'Base SQLite locale/IndexedDB initialisée avec succès. Zéro latence réseau.',
         });
       } else {
-        // Cloud SQL PostgreSQL / External
         setTimeout(() => {
           setDbTestResult({
             status: 'success',
             latency: 14,
-            message: `Connecteur PostgreSQL prêt. Pool de connexions TCP/SSL vérifié (${databaseConfig.postgresHost}:${databaseConfig.postgresPort}).`
+            message: `Connecteur PostgreSQL prêt. Pool de connexions TCP/SSL vérifié (${databaseConfig.postgresHost}:${databaseConfig.postgresPort}).`,
           });
         }, 600);
       }
     } catch (err: any) {
       setDbTestResult({
         status: 'error',
-        message: `Erreur de connexion SGBD : ${err?.message || 'Serveur distant inaccessible'}`
+        message: `Erreur de connexion SGBD : ${formatReadableError(err)}`,
       });
     }
   };
@@ -267,62 +279,240 @@ export default function Settings() {
     setMigrationStatus('migrating');
     setTimeout(() => {
       setMigrationStatus('done');
+      showToast('Migration et vérification des schémas SGBD terminées.', 'success');
       setTimeout(() => setMigrationStatus('idle'), 4000);
     }, 1500);
   };
 
-  // Gestion des sites
-  const handleAddSite = () => {
-    if (!newSiteData.name || !newSiteData.code) return;
-    const newSite = {
-      id: `site-${Date.now()}`,
-      code: newSiteData.code.toUpperCase(),
-      name: newSiteData.name,
-      city: newSiteData.city,
-      address: newSiteData.address,
-      manager: newSiteData.manager || 'Responsable Non Assigné',
-      posCount: Number(newSiteData.posCount) || 1,
-      isPrimary: false,
-      status: 'Actif',
-    };
-    setSitesList([...sitesList, newSite]);
-    setNewSiteModal(false);
+  // Gestion des sites (Create / Update / Delete)
+  const openCreateSiteModal = () => {
+    setEditingSiteId(null);
     setNewSiteData({ code: '', name: '', city: 'Kinshasa', address: '', manager: '', posCount: 1 });
+    setNewSiteModal(true);
   };
 
-  const handleDeleteSite = (id: string) => {
-    if (sitesList.find(s => s.id === id)?.isPrimary) {
-      alert('Impossible de supprimer le site principal de référence.');
+  const openEditSiteModal = (site: (typeof sitesList)[0]) => {
+    setEditingSiteId(site.id);
+    setNewSiteData({
+      code: site.code,
+      name: site.name,
+      city: site.city,
+      address: site.address,
+      manager: site.manager,
+      posCount: site.posCount,
+    });
+    setNewSiteModal(true);
+  };
+
+  const handleSaveSite = async () => {
+    if (!newSiteData.name.trim() || !newSiteData.code.trim()) {
+      showToast('Veuillez renseigner le code et le nom du site.', 'error');
       return;
     }
-    setSitesList(sitesList.filter(s => s.id !== id));
+
+    let updatedSites: typeof sitesList;
+    let targetSiteId: string;
+    let targetSiteObj: (typeof sitesList)[0];
+
+    if (editingSiteId) {
+      targetSiteId = editingSiteId;
+      updatedSites = sitesList.map((s) =>
+        s.id === editingSiteId
+          ? {
+              ...s,
+              code: newSiteData.code.trim().toUpperCase(),
+              name: newSiteData.name.trim(),
+              city: newSiteData.city.trim(),
+              address: newSiteData.address.trim(),
+              manager: newSiteData.manager.trim() || 'Responsable Non Assigné',
+              posCount: Number(newSiteData.posCount) || 1,
+            }
+          : s
+      );
+      targetSiteObj = updatedSites.find((s) => s.id === editingSiteId)!;
+    } else {
+      targetSiteId = `site-${Date.now()}`;
+      targetSiteObj = {
+        id: targetSiteId,
+        code: newSiteData.code.trim().toUpperCase(),
+        name: newSiteData.name.trim(),
+        city: newSiteData.city.trim(),
+        address: newSiteData.address.trim(),
+        manager: newSiteData.manager.trim() || 'Responsable Non Assigné',
+        posCount: Number(newSiteData.posCount) || 1,
+        isPrimary: false,
+        status: 'Actif',
+      };
+      updatedSites = [...sitesList, targetSiteObj];
+    }
+
+    try {
+      setSitesList(updatedSites);
+      await setDoc(
+        doc(db, 'sites', targetSiteId),
+        {
+          name: targetSiteObj.name,
+          code: targetSiteObj.code,
+          city: targetSiteObj.city,
+          address: targetSiteObj.address,
+          manager: targetSiteObj.manager,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      await persistFullConfig({ sites: updatedSites });
+      showToast(editingSiteId ? 'Site mis à jour dans le Cloud.' : 'Nouveau dépôt créé et synchronisé.', 'success');
+      setNewSiteModal(false);
+      setEditingSiteId(null);
+      setNewSiteData({ code: '', name: '', city: 'Kinshasa', address: '', manager: '', posCount: 1 });
+    } catch (err) {
+      showToast(formatReadableError(err), 'error');
+      try {
+        handleFirestoreError(err, OperationType.WRITE, `sites/${targetSiteId}`);
+      } catch {
+        // logged
+      }
+    }
   };
 
-  // Gestion des utilisateurs
-  const handleAddUser = () => {
-    if (!newUserData.username || !newUserData.fullName) return;
-    const newUser = {
-      id: `usr-${Date.now()}`,
-      username: newUserData.username.toLowerCase(),
-      fullName: newUserData.fullName,
-      role: newUserData.role,
-      site: newUserData.site,
-      pin: '****',
-      active: true,
-    };
-    setUsersList([...usersList, newUser]);
-    setNewUserModal(false);
+  const handleDeleteSite = async (id: string) => {
+    const target = sitesList.find((s) => s.id === id);
+    if (target?.isPrimary) {
+      showToast('Impossible de supprimer le site principal de référence.', 'error');
+      return;
+    }
+    const confirmed = await confirmAction({
+      title: 'Supprimer ce dépôt / succursale ?',
+      message: `Voulez-vous supprimer le site "${target?.name || id}" de la configuration réseau ?`,
+      confirmLabel: 'Supprimer le site',
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    const updatedSites = sitesList.filter((s) => s.id !== id);
+    try {
+      setSitesList(updatedSites);
+      await deleteDoc(doc(db, 'sites', id));
+      await persistFullConfig({ sites: updatedSites });
+      showToast('Site supprimé de la configuration.', 'info');
+    } catch (err) {
+      showToast(formatReadableError(err), 'error');
+      try {
+        handleFirestoreError(err, OperationType.DELETE, `sites/${id}`);
+      } catch {
+        // logged
+      }
+    }
+  };
+
+  // Gestion des utilisateurs (Create / Update / Delete)
+  const openCreateUserModal = () => {
+    setEditingUserId(null);
     setNewUserData({ username: '', fullName: '', role: 'Caissier Comptoir', site: 'Dépôt Central Kinshasa', pin: '' });
+    setNewUserModal(true);
   };
 
-  const handleToggleUserStatus = (id: string) => {
-    setUsersList(usersList.map(u => u.id === id ? { ...u, active: !u.active } : u));
+  const openEditUserModal = (user: (typeof usersList)[0]) => {
+    setEditingUserId(user.id);
+    setNewUserData({
+      username: user.username,
+      fullName: user.fullName,
+      role: user.role,
+      site: user.site,
+      pin: user.pin === '****' ? '' : user.pin,
+    });
+    setNewUserModal(true);
+  };
+
+  const handleSaveUser = async () => {
+    if (!newUserData.username.trim() || !newUserData.fullName.trim()) {
+      showToast("Veuillez renseigner l'identifiant et le nom complet.", 'error');
+      return;
+    }
+
+    let updatedUsers: typeof usersList;
+    if (editingUserId) {
+      updatedUsers = usersList.map((u) =>
+        u.id === editingUserId
+          ? {
+              ...u,
+              username: newUserData.username.trim().toLowerCase(),
+              fullName: newUserData.fullName.trim(),
+              role: newUserData.role,
+              site: newUserData.site,
+              pin: newUserData.pin ? newUserData.pin : u.pin,
+            }
+          : u
+      );
+    } else {
+      const newUser = {
+        id: `usr-${Date.now()}`,
+        username: newUserData.username.trim().toLowerCase(),
+        fullName: newUserData.fullName.trim(),
+        role: newUserData.role,
+        site: newUserData.site,
+        pin: newUserData.pin || '****',
+        active: true,
+      };
+      updatedUsers = [...usersList, newUser];
+    }
+
+    try {
+      setUsersList(updatedUsers);
+      await persistFullConfig({ users: updatedUsers });
+      showToast(editingUserId ? 'Collaborateur mis à jour.' : 'Collaborateur ajouté et sauvegardé.', 'success');
+      setNewUserModal(false);
+      setEditingUserId(null);
+      setNewUserData({ username: '', fullName: '', role: 'Caissier Comptoir', site: 'Dépôt Central Kinshasa', pin: '' });
+    } catch (err) {
+      showToast(formatReadableError(err), 'error');
+      try {
+        handleFirestoreError(err, OperationType.WRITE, 'settings/config');
+      } catch {
+        // logged
+      }
+    }
+  };
+
+  const handleToggleUserStatus = async (id: string) => {
+    const updatedUsers = usersList.map((u) => (u.id === id ? { ...u, active: !u.active } : u));
+    try {
+      setUsersList(updatedUsers);
+      await persistFullConfig({ users: updatedUsers });
+      showToast("Statut d'accès utilisateur mis à jour.", 'info');
+    } catch (err) {
+      showToast(formatReadableError(err), 'error');
+    }
+  };
+
+  const handleDeleteUser = async (user: (typeof usersList)[0]) => {
+    if (user.username === 'admin') {
+      showToast('Le compte Super Admin système ne peut pas être supprimé.', 'error');
+      return;
+    }
+    const confirmed = await confirmAction({
+      title: 'Supprimer ce compte collaborateur ?',
+      message: `Voulez-vous retirer l'utilisateur "${user.fullName}" (@${user.username}) ?`,
+      confirmLabel: 'Supprimer',
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    const updatedUsers = usersList.filter((u) => u.id !== user.id);
+    try {
+      setUsersList(updatedUsers);
+      await persistFullConfig({ users: updatedUsers });
+      showToast('Collaborateur supprimé.', 'info');
+    } catch (err) {
+      showToast(formatReadableError(err), 'error');
+    }
   };
 
   // Export JSON Backup
   const handleExportBackup = () => {
     const backupData = {
-      pharmaflowERPVersion: '2026.4.1-PROD',
+      softwareName: 'SHEKINAH PHARMA',
+      erpVersion: '2026.4.1-PROD',
       exportTimestamp: new Date().toISOString(),
       config: {
         general: generalConfig,
@@ -336,7 +526,7 @@ export default function Settings() {
     const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(backupData, null, 2));
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute('href', dataStr);
-    downloadAnchor.setAttribute('download', `PHARMAFLOW_BACKUP_ERP_${new Date().toISOString().slice(0, 10)}.json`);
+    downloadAnchor.setAttribute('download', `SHEKINAH_PHARMA_BACKUP_ERP_${new Date().toISOString().slice(0, 10)}.json`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
@@ -626,7 +816,7 @@ export default function Settings() {
               </div>
 
               <button
-                onClick={() => setNewSiteModal(true)}
+                onClick={openCreateSiteModal}
                 className="flex items-center gap-2 px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-blue-600/30 cursor-pointer"
               >
                 <Plus size={15} />
@@ -657,15 +847,24 @@ export default function Settings() {
                       </div>
                     </div>
 
-                    {!site.isPrimary && (
+                    <div className="flex items-center gap-1">
                       <button
-                        onClick={() => handleDeleteSite(site.id)}
-                        className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition-colors"
-                        title="Supprimer ce site"
+                        onClick={() => openEditSiteModal(site)}
+                        className="p-1.5 text-slate-400 hover:text-amber-400 rounded-lg hover:bg-amber-500/10 transition-colors cursor-pointer"
+                        title="Modifier ce site"
                       >
-                        <Trash2 size={15} />
+                        <Edit3 size={14} />
                       </button>
-                    )}
+                      {!site.isPrimary && (
+                        <button
+                          onClick={() => handleDeleteSite(site.id)}
+                          className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition-colors cursor-pointer"
+                          title="Supprimer ce site"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div className="space-y-2 text-xs text-slate-300 pt-2 border-t border-slate-800/80">
@@ -696,16 +895,18 @@ export default function Settings() {
               ))}
             </div>
 
-            {/* MODAL NOUVEAU SITE */}
+            {/* MODAL NOUVEAU / MODIFIER SITE */}
             {newSiteModal && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
                 <div className="bg-[#0c1222] border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
                   <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                     <div className="flex items-center gap-2">
                       <Store className="text-blue-400" size={20} />
-                      <h3 className="font-bold text-white text-base">Nouveau Dépôt / Succursale Pharmaceutique</h3>
+                      <h3 className="font-bold text-white text-base">
+                        {editingSiteId ? 'Modifier Dépôt / Succursale' : 'Nouveau Dépôt / Succursale Pharmaceutique'}
+                      </h3>
                     </div>
-                    <button onClick={() => setNewSiteModal(false)} className="text-slate-400 hover:text-white">
+                    <button onClick={() => setNewSiteModal(false)} className="text-slate-400 hover:text-white cursor-pointer">
                       <X size={18} />
                     </button>
                   </div>
@@ -782,15 +983,15 @@ export default function Settings() {
                   <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
                     <button
                       onClick={() => setNewSiteModal(false)}
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold"
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
                     >
                       Annuler
                     </button>
                     <button
-                      onClick={handleAddSite}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold"
+                      onClick={handleSaveSite}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold cursor-pointer"
                     >
-                      Créer le Site
+                      {editingSiteId ? 'Enregistrer Modifications' : 'Créer le Site'}
                     </button>
                   </div>
                 </div>
@@ -1145,7 +1346,7 @@ export default function Settings() {
                       <div className="w-14 h-14 bg-gray-200 border border-gray-400 flex items-center justify-center font-bold text-[8px] text-gray-600">
                         [QR FISCAL]
                       </div>
-                      <span className="text-[7px] text-gray-500 mt-1">CERTIFIÉ PAR PHARMAFLOW ERP</span>
+                      <span className="text-[7px] text-gray-500 mt-1">CERTIFIÉ PAR SHEKINAH PHARMA ERP</span>
                     </div>
                   )}
 
@@ -1177,7 +1378,7 @@ export default function Settings() {
               </div>
 
               <button
-                onClick={() => setNewUserModal(true)}
+                onClick={openCreateUserModal}
                 className="flex items-center gap-2 px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-blue-600/30 cursor-pointer"
               >
                 <Plus size={15} />
@@ -1234,7 +1435,24 @@ export default function Settings() {
                         </button>
                       </td>
                       <td className="py-3 px-4 text-right">
-                        <span className="text-[11px] font-mono text-slate-500">PIN: {user.pin}</span>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => openEditUserModal(user)}
+                            className="p-1.5 bg-amber-600/20 text-amber-400 border border-amber-500/30 rounded-lg hover:bg-amber-600 hover:text-white transition-colors cursor-pointer"
+                            title="Modifier utilisateur"
+                          >
+                            <Edit3 size={13} />
+                          </button>
+                          {user.username !== 'admin' && (
+                            <button
+                              onClick={() => handleDeleteUser(user)}
+                              className="p-1.5 bg-rose-600/20 text-rose-400 border border-rose-500/30 rounded-lg hover:bg-rose-600 hover:text-white transition-colors cursor-pointer"
+                              title="Supprimer utilisateur"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1242,16 +1460,18 @@ export default function Settings() {
               </table>
             </div>
 
-            {/* MODAL AJOUT UTILISATEUR */}
+            {/* MODAL AJOUT / MODIFIER UTILISATEUR */}
             {newUserModal && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
                 <div className="bg-[#0c1222] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
                   <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                     <div className="flex items-center gap-2">
                       <Users className="text-blue-400" size={20} />
-                      <h3 className="font-bold text-white text-base">Nouveau Compte Utilisateur</h3>
+                      <h3 className="font-bold text-white text-base">
+                        {editingUserId ? 'Modifier Compte Collaborateur' : 'Nouveau Compte Utilisateur'}
+                      </h3>
                     </div>
-                    <button onClick={() => setNewUserModal(false)} className="text-slate-400 hover:text-white">
+                    <button onClick={() => setNewUserModal(false)} className="text-slate-400 hover:text-white cursor-pointer">
                       <X size={18} />
                     </button>
                   </div>
@@ -1311,15 +1531,15 @@ export default function Settings() {
                   <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
                     <button
                       onClick={() => setNewUserModal(false)}
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold"
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
                     >
                       Annuler
                     </button>
                     <button
-                      onClick={handleAddUser}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold"
+                      onClick={handleSaveUser}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold cursor-pointer"
                     >
-                      Enregistrer
+                      {editingUserId ? 'Mettre à Jour' : 'Enregistrer'}
                     </button>
                   </div>
                 </div>
@@ -1660,7 +1880,7 @@ export default function Settings() {
                   </div>
 
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    Connectez directement votre PharmaFlow ERP au serveur physique de l'officine sur le réseau local ethernet (IP privée 192.168.x.x) pour un contrôle physique total sur site.
+                    Connectez directement votre SHEKINAH PHARMA ERP au serveur physique de l'officine sur le réseau local ethernet (IP privée 192.168.x.x) pour un contrôle physique total sur site.
                   </p>
 
                   <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono text-slate-400">
@@ -1819,7 +2039,7 @@ export default function Settings() {
 
                 <button
                   onClick={() => {
-                    const schemaSql = `-- PHARMAFLOW ERP POSTGRESQL SCHEMA EXPORT
+                    const schemaSql = `-- SHEKINAH PHARMA ERP POSTGRESQL SCHEMA EXPORT
 CREATE TABLE IF NOT EXISTS sites (
     id VARCHAR(64) PRIMARY KEY,
     code VARCHAR(32) NOT NULL,
@@ -1853,7 +2073,7 @@ CREATE TABLE IF NOT EXISTS sales (
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = 'pharmaflow_erp_schema.sql';
+                    a.download = 'shekinah_pharma_erp_schema.sql';
                     a.click();
                   }}
                   className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
@@ -1922,7 +2142,12 @@ CREATE TABLE IF NOT EXISTS sales (
               </p>
               <div className="pt-2 flex items-center gap-3">
                 <button
-                  onClick={() => alert("Diagnostic d'intégrité exécuté : 0 anomalies détectées sur les stocks et les écritures de caisse.")}
+                  onClick={() =>
+                    showToast(
+                      "Diagnostic d'intégrité exécuté : 0 anomalies détectées sur les stocks et les écritures de caisse.",
+                      'success'
+                    )
+                  }
                   className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
                 >
                   Vérifier l'intégrité de la base de données

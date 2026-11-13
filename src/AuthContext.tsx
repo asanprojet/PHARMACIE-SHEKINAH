@@ -1,7 +1,14 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { onAuthStateChanged, User as FirebaseUser, signInAnonymously, signOut as fbSignOut } from 'firebase/auth';
+import {
+  onAuthStateChanged,
+  User as FirebaseUser,
+  signInWithPopup,
+  GoogleAuthProvider,
+  signInAnonymously,
+  signOut as fbSignOut,
+} from 'firebase/auth';
 import { auth, db } from './firebase';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 export interface AppUserProfile {
   uid: string;
@@ -11,138 +18,174 @@ export interface AppUserProfile {
   roleTitle: string;
   siteId: string;
   siteName: string;
-  isDemoSession?: boolean;
+  photoURL?: string;
 }
 
 interface AuthContextType {
   firebaseUser: FirebaseUser | null;
   currentUser: AppUserProfile | null;
+  authReady: boolean;
   loading: boolean;
+  loginWithGoogle: (roleKey?: string) => Promise<void>;
   loginAsRole: (roleKey: string, customName?: string) => Promise<void>;
+  switchRole: (roleKey: string) => void;
   logout: () => Promise<void>;
 }
 
-const LOCAL_STORAGE_SESSION_KEY = 'pharmaflow_active_session_v1';
+const LOCAL_ROLE_KEY = 'pharmaflow_active_role_v2';
 
-const defaultProfiles: Record<string, AppUserProfile> = {
+export const defaultProfiles: Record<string, AppUserProfile> = {
   super_admin: {
     uid: 'USR-ADMIN-01',
-    email: 'admin@pharmaflow.cd',
-    displayName: 'Architecte Système (Créateur)',
+    email: 'admin@shekinah-pharma.cd',
+    displayName: 'Architecte Système',
     role: 'super_admin',
     roleTitle: 'ARCHITECTE SYSTÈME & SUPER ADMIN',
     siteId: 'site1',
-    siteName: 'Pharmacie Centrale (Kinshasa)'
+    siteName: 'Pharmacie Centrale (Kinshasa)',
   },
   pharmacist: {
     uid: 'USR-PHARM-01',
-    email: 'pharmacien.titulaire@pharmaflow.cd',
+    email: 'pharmacien.titulaire@shekinah-pharma.cd',
     displayName: 'Dr. Ilunga Mwamba',
     role: 'pharmacist',
     roleTitle: 'PHARMACIEN TITULAIRE',
     siteId: 'site1',
-    siteName: 'Pharmacie Centrale (Kinshasa)'
+    siteName: 'Pharmacie Centrale (Kinshasa)',
   },
   cashier: {
     uid: 'USR-CASH-01',
-    email: 'caisse.jour@pharmaflow.cd',
+    email: 'caisse.jour@shekinah-pharma.cd',
     displayName: 'Aline Kabila',
     role: 'cashier',
     roleTitle: 'CAISSIER PRINCIPAL (COMPTOIR)',
     siteId: 'site1',
-    siteName: 'Pharmacie Centrale (Kinshasa)'
+    siteName: 'Pharmacie Centrale (Kinshasa)',
   },
   stock_manager: {
     uid: 'USR-STOCK-01',
-    email: 'logistique@pharmaflow.cd',
+    email: 'logistique@shekinah-pharma.cd',
     displayName: 'Marc Tshisekedi',
     role: 'stock_manager',
     roleTitle: 'GESTIONNAIRE DES STOCKS & DÉPÔTS',
     siteId: 'site1',
-    siteName: 'Dépôt Central Lubumbashi'
+    siteName: 'Dépôt Central Lubumbashi',
   },
   accountant: {
     uid: 'USR-ACCT-01',
-    email: 'finance@pharmaflow.cd',
+    email: 'finance@shekinah-pharma.cd',
     displayName: 'Claire Mutombo',
     role: 'accountant',
     roleTitle: 'COMPTABLE & AUDITEUR FINANCIER',
     siteId: 'site1',
-    siteName: 'Direction Financière'
-  }
+    siteName: 'Direction Financière',
+  },
 };
 
 const AuthContext = createContext<AuthContextType>({
   firebaseUser: null,
   currentUser: null,
-  loading: true,
+  authReady: false,
+  loading: false,
+  loginWithGoogle: async () => {},
   loginAsRole: async () => {},
-  logout: async () => {}
+  switchRole: () => {},
+  logout: async () => {},
 });
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
-  const [currentUser, setCurrentUser] = useState<AppUserProfile | null>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_SESSION_KEY);
-      return saved ? JSON.parse(saved) : defaultProfiles.super_admin;
-    } catch {
-      return defaultProfiles.super_admin;
-    }
-  });
+  const [currentUser, setCurrentUser] = useState<AppUserProfile | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  const buildProfile = (fbUser: FirebaseUser, roleKey: string, customName?: string): AppUserProfile => {
+    const base = defaultProfiles[roleKey] || defaultProfiles.super_admin;
+    return {
+      ...base,
+      uid: fbUser.uid,
+      email: fbUser.email || base.email,
+      displayName: customName || fbUser.displayName || base.displayName,
+      photoURL: fbUser.photoURL || undefined,
+    };
+  };
+
+  const syncUserDoc = async (profile: AppUserProfile) => {
+    try {
+      await setDoc(
+        doc(db, 'users', profile.uid),
+        {
+          uid: profile.uid,
+          email: profile.email,
+          displayName: profile.displayName,
+          role: profile.role,
+          siteId: profile.siteId,
+          lastLogin: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.warn('User profile sync skipped:', err);
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setFirebaseUser(user);
+      if (user) {
+        const savedRole = localStorage.getItem(LOCAL_ROLE_KEY) || 'super_admin';
+        const profile = buildProfile(user, savedRole);
+        setCurrentUser(profile);
+      } else {
+        setCurrentUser(null);
+      }
+      setAuthReady(true);
     });
     return unsubscribe;
   }, []);
 
-  const loginAsRole = async (roleKey: string, customName?: string) => {
+  const loginWithGoogle = async (roleKey: string = 'super_admin') => {
     setLoading(true);
     try {
-      // 1. Silent anonymous authentication to satisfy Firestore security rules
-      if (!auth.currentUser) {
-        try {
-          await signInAnonymously(auth);
-        } catch (e) {
-          console.warn('Anonymous auth fallback:', e);
-        }
-      }
-
-      const base = defaultProfiles[roleKey] || defaultProfiles.super_admin;
-      const profile: AppUserProfile = {
-        ...base,
-        displayName: customName || base.displayName,
-        isDemoSession: true
-      };
-
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const cred = await signInWithPopup(auth, provider);
+      localStorage.setItem(LOCAL_ROLE_KEY, roleKey);
+      const profile = buildProfile(cred.user, roleKey);
       setCurrentUser(profile);
-      localStorage.setItem(LOCAL_STORAGE_SESSION_KEY, JSON.stringify(profile));
-
-      // Try persisting role info in Firestore users collection if permissions allow
-      if (auth.currentUser) {
-        try {
-          await setDoc(doc(db, 'users', auth.currentUser.uid), {
-            uid: auth.currentUser.uid,
-            email: profile.email,
-            displayName: profile.displayName,
-            role: profile.role,
-            siteId: profile.siteId,
-            lastLogin: serverTimestamp()
-          }, { merge: true });
-        } catch {
-          // Silent catch for sandboxed environments
-        }
-      }
+      await syncUserDoc(profile);
     } finally {
       setLoading(false);
     }
   };
 
+  const loginAsRole = async (roleKey: string, customName?: string) => {
+    setLoading(true);
+    try {
+      let fbUser = auth.currentUser;
+      if (!fbUser) {
+        const cred = await signInAnonymously(auth);
+        fbUser = cred.user;
+      }
+      localStorage.setItem(LOCAL_ROLE_KEY, roleKey);
+      const profile = buildProfile(fbUser, roleKey, customName);
+      setCurrentUser(profile);
+      await syncUserDoc(profile);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const switchRole = (roleKey: string) => {
+    if (!firebaseUser) return;
+    localStorage.setItem(LOCAL_ROLE_KEY, roleKey);
+    const profile = buildProfile(firebaseUser, roleKey);
+    setCurrentUser(profile);
+    syncUserDoc(profile);
+  };
+
   const logout = async () => {
-    localStorage.removeItem(LOCAL_STORAGE_SESSION_KEY);
+    localStorage.removeItem(LOCAL_ROLE_KEY);
     setCurrentUser(null);
     try {
       await fbSignOut(auth);
@@ -152,7 +195,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ firebaseUser, currentUser, loading, loginAsRole, logout }}>
+    <AuthContext.Provider
+      value={{
+        firebaseUser,
+        currentUser,
+        authReady,
+        loading,
+        loginWithGoogle,
+        loginAsRole,
+        switchRole,
+        logout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

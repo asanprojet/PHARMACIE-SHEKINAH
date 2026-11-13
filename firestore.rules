@@ -5,49 +5,89 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    match /test/{docId} {
+      allow read: if true;
+    }
+
     match /sites/{siteId} {
-      // Accès lecture et écriture pour les opérateurs authentifiés
-      allow read, write: if request.auth != null;
-      
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSignedIn() && isValidId(siteId);
+
       match /inventory/{productId} {
-        allow read, write: if request.auth != null;
+        allow read: if isSignedIn();
+        allow create, update, delete: if isSignedIn() && isValidId(productId);
       }
-      
+
       match /procurement/{procurementId} {
-        allow read, write: if request.auth != null;
+        allow read: if isSignedIn();
+        allow create, update, delete: if isSignedIn() && isValidId(procurementId);
+      }
+
+      match /suppliers/{supplierId} {
+        allow read: if isSignedIn();
+        allow create, update, delete: if isSignedIn() && isValidId(supplierId);
       }
 
       match /sales/{saleId} {
-        allow read, write: if request.auth != null;
+        allow read: if isSignedIn();
+        allow create, update, delete: if isSignedIn() && isValidId(saleId);
       }
 
       match /credits/{creditId} {
-        allow read, write: if request.auth != null;
+        allow read: if isSignedIn();
+        allow create, update, delete: if isSignedIn() && isValidId(creditId);
       }
 
-      match /auditlogs/{logId} {
-        allow read, create: if request.auth != null;
-        allow update, delete: if false;
+      match /patients/{patientId} {
+        allow read: if isSignedIn();
+        allow create, update, delete: if isSignedIn() && isValidId(patientId);
+      }
+
+      match /prescriptions/{prescriptionId} {
+        allow read: if isSignedIn();
+        allow create, update, delete: if isSignedIn() && isValidId(prescriptionId);
       }
 
       match /lots/{lotId} {
-        allow read, write: if request.auth != null;
+        allow read: if isSignedIn();
+        allow create, update, delete: if isSignedIn() && isValidId(lotId);
+      }
+
+      match /alerts/{alertId} {
+        allow read: if isSignedIn();
+        allow create, update, delete: if isSignedIn() && isValidId(alertId);
+      }
+
+      match /auditlogs/{logId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() && isValidId(logId);
+        allow update, delete: if false;
       }
 
       match /settings/{settingId} {
-        allow read, write: if request.auth != null;
+        allow read: if isSignedIn();
+        allow create, update, delete: if isSignedIn() && isValidId(settingId);
       }
     }
 
     match /settings/{settingId} {
-      allow read, write: if request.auth != null;
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSignedIn() && isValidId(settingId);
     }
 
     match /users/{userId} {
-      allow read, write: if request.auth != null;
-      
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+
       match /profile/{profileId} {
-        allow read, write: if request.auth != null;
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
       }
     }
   }

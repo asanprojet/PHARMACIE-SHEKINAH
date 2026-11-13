@@ -1,18 +1,10 @@
 import { useEffect, useState } from 'react';
 import { db } from './firebase';
 import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
-import { 
-  ShieldCheck, 
-  Search, 
-  Filter, 
-  Download, 
-  User, 
-  Clock, 
-  Lock, 
-  CheckCircle, 
-  AlertCircle,
-  FileSpreadsheet
-} from 'lucide-react';
+import { ShieldCheck, Search, User, Clock, FileSpreadsheet } from 'lucide-react';
+import { useAuth } from './AuthContext';
+import { useToast } from './ToastContext';
+import { OperationType, handleFirestoreError, formatReadableError } from './firestoreUtils';
 
 interface LogEntry {
   id: string;
@@ -24,49 +16,77 @@ interface LogEntry {
 }
 
 export default function AuditTrail() {
+  const { authReady, firebaseUser, currentUser } = useAuth();
+  const { showToast } = useToast();
+  const siteId = currentUser?.siteId || 'site1';
+
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterAction, setFilterAction] = useState('ALL');
-  const [siteId] = useState('site1');
 
   useEffect(() => {
+    if (!authReady || !firebaseUser) return;
+
     const logsRef = collection(db, 'sites', siteId, 'auditlogs');
     const q = query(logsRef, orderBy('timestamp', 'desc'), limit(150));
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setLogs(snapshot.docs.map(doc => ({ id: doc.id, ...(doc.data() as any) })));
-    });
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        setLogs(snapshot.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) })));
+      },
+      (err) => {
+        showToast(formatReadableError(err), 'error');
+        try {
+          handleFirestoreError(err, OperationType.LIST, `sites/${siteId}/auditlogs`);
+        } catch {
+          // logged
+        }
+      }
+    );
     return unsubscribe;
-  }, [siteId]);
+  }, [authReady, firebaseUser, siteId, showToast]);
 
   const exportAuditCSV = () => {
-    if (logs.length === 0) return;
+    if (logs.length === 0) {
+      showToast("Aucune écriture d'audit à exporter.", 'info');
+      return;
+    }
     const headers = ['ID,Utilisateur,Action,Date_Heure'];
-    const rows = logs.map(l => {
+    const rows = logs.map((l) => {
       const date = l.timestamp?.toDate ? l.timestamp.toDate().toISOString() : '';
-      return `"${l.id}","${l.userId}","${l.action.replace(/"/g, '""')}","${date}"`;
+      return `"${l.id}","${l.userId || ''}","${(l.action || '').replace(/"/g, '""')}","${date}"`;
     });
     const blob = new Blob([headers.concat(rows).join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `audit_trail_pharmaflow_${new Date().toISOString().slice(0,10)}.csv`);
+    link.setAttribute('download', `audit_trail_shekinah_pharma_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast('Registre audit exporté en CSV.', 'success');
   };
 
-  const filteredLogs = logs.filter(l => {
-    const matchesSearch = 
+  const filteredLogs = logs.filter((l) => {
+    const matchesSearch =
       l.action?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       l.userId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       l.id?.toLowerCase().includes(searchTerm.toLowerCase());
-    
+
     let matchesFilter = true;
-    if (filterAction === 'VENTE') matchesFilter = l.action?.toLowerCase().includes('vente');
-    if (filterAction === 'PRIX') matchesFilter = l.action?.toLowerCase().includes('prix');
-    if (filterAction === 'STOCK') matchesFilter = l.action?.toLowerCase().includes('stock') || l.action?.toLowerCase().includes('réapprovisionnement');
-    if (filterAction === 'COMMANDE') matchesFilter = l.action?.toLowerCase().includes('commande');
+    const act = l.action?.toLowerCase() || '';
+    if (filterAction === 'VENTE') matchesFilter = act.includes('vente') || act.includes('facture');
+    if (filterAction === 'PRIX') matchesFilter = act.includes('prix') || act.includes('crédit') || act.includes('modification');
+    if (filterAction === 'STOCK')
+      matchesFilter =
+        act.includes('stock') ||
+        act.includes('réapprovisionnement') ||
+        act.includes('lot') ||
+        act.includes('commande') ||
+        act.includes('produit') ||
+        act.includes('réception');
 
     return matchesSearch && matchesFilter;
   });
@@ -116,7 +136,7 @@ export default function AuditTrail() {
               OPÉRATEURS ACTIFS
             </span>
             <div className="text-2xl font-mono font-extrabold text-emerald-400">
-              {Array.from(new Set(logs.map(l => l.userId))).length}
+              {Array.from(new Set(logs.map((l) => l.userId))).length}
             </div>
             <div className="text-[11px] text-slate-400 mt-1">Utilisateurs distincts tracés</div>
           </div>
@@ -155,25 +175,33 @@ export default function AuditTrail() {
         <div className="flex items-center bg-[#0d1322] border border-slate-800 rounded-xl p-1 text-xs font-semibold">
           <button
             onClick={() => setFilterAction('ALL')}
-            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${filterAction === 'ALL' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+              filterAction === 'ALL' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+            }`}
           >
             Tous les flux ({logs.length})
           </button>
           <button
             onClick={() => setFilterAction('VENTE')}
-            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${filterAction === 'VENTE' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+              filterAction === 'VENTE' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+            }`}
           >
             Ventes POS
           </button>
           <button
             onClick={() => setFilterAction('PRIX')}
-            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${filterAction === 'PRIX' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}
+            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+              filterAction === 'PRIX' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'
+            }`}
           >
             Tarification
           </button>
           <button
             onClick={() => setFilterAction('STOCK')}
-            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${filterAction === 'STOCK' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+            className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+              filterAction === 'STOCK' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
+            }`}
           >
             Stocks & Achats
           </button>
@@ -203,18 +231,12 @@ export default function AuditTrail() {
               ) : (
                 filteredLogs.map((log) => (
                   <tr key={log.id} className="hover:bg-slate-800/40 transition-colors">
-                    <td className="py-3 px-4 text-blue-400 font-bold">
-                      {log.id.slice(0, 10)}...
-                    </td>
+                    <td className="py-3 px-4 text-blue-400 font-bold">{log.id.slice(0, 10)}...</td>
                     <td className="py-3 px-4 text-slate-300">
                       {log.timestamp?.toDate ? log.timestamp.toDate().toLocaleString() : 'Récemment'}
                     </td>
-                    <td className="py-3 px-4 text-white font-sans font-semibold">
-                      {log.userId}
-                    </td>
-                    <td className="py-3 px-4 text-slate-200 font-sans">
-                      {log.action}
-                    </td>
+                    <td className="py-3 px-4 text-white font-sans font-semibold">{log.userId}</td>
+                    <td className="py-3 px-4 text-slate-200 font-sans">{log.action}</td>
                     <td className="py-3 px-4 text-center font-sans">
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
                         AUDITÉ

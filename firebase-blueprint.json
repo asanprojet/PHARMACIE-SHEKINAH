@@ -7,7 +7,9 @@
       "properties": {
         "uid": { "type": "string" },
         "email": { "type": "string" },
-        "role": { "type": "string", "enum": ["admin", "pharmacist", "staff"] }
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["super_admin", "owner", "pharmacist", "senior_pharmacist", "cashier", "stock_manager", "accountant", "auditor", "admin", "staff"] },
+        "siteId": { "type": "string" }
       },
       "required": ["uid", "email", "role"]
     },
@@ -20,6 +22,27 @@
         "displayName": { "type": "string" }
       },
       "required": ["userId", "displayName"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Pharmaceutical inventory item",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "barcode": { "type": "string" },
+        "name": { "type": "string" },
+        "formDosage": { "type": "string" },
+        "category": { "type": "string" },
+        "brand": { "type": "string" },
+        "stockLevel": { "type": "number" },
+        "minStock": { "type": "number" },
+        "purchasePriceUSD": { "type": "number" },
+        "price": { "type": "number" },
+        "equivCDF": { "type": "number" },
+        "unit": { "type": "string" },
+        "prescriptionRequired": { "type": "boolean" }
+      },
+      "required": ["name", "stockLevel", "price"]
     },
     "Alert": {
       "title": "Alert",
@@ -38,25 +61,62 @@
       "description": "Stock procurement order",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
+        "poNumber": { "type": "string" },
         "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "supplier": { "type": "string" },
         "quantity": { "type": "number" },
+        "unitCostUSD": { "type": "number" },
+        "totalUSD": { "type": "number" },
         "status": { "type": "string" }
       },
-      "required": ["id", "productId", "quantity", "status"]
+      "required": ["productId", "quantity", "status"]
+    },
+    "Supplier": {
+      "title": "Supplier",
+      "description": "Pharmaceutical supplier / wholesaler",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "country": { "type": "string" },
+        "phone": { "type": "string" },
+        "delay": { "type": "string" },
+        "rating": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["name"]
     },
     "Sale": {
       "title": "Sale",
       "description": "Pharmacy sale record",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
+        "ticketId": { "type": "string" },
         "productId": { "type": "string" },
+        "name": { "type": "string" },
         "quantity": { "type": "number" },
-        "amount": { "type": "number" },
-        "timestamp": { "type": "string", "format": "date-time" }
+        "unitPriceUSD": { "type": "number" },
+        "totalUSD": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "currency": { "type": "string" },
+        "client": { "type": "string" }
       },
-      "required": ["id", "productId", "quantity", "amount", "timestamp"]
+      "required": ["productId", "quantity", "totalUSD"]
+    },
+    "Credit": {
+      "title": "Credit",
+      "description": "Customer or insurance credit dossier",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "clientName": { "type": "string" },
+        "amountUSD": { "type": "number" },
+        "amountCDF": { "type": "number" },
+        "status": { "type": "string" },
+        "dueDate": { "type": "string" },
+        "reason": { "type": "string" }
+      },
+      "required": ["clientName", "amountUSD", "status"]
     },
     "Site": {
       "title": "Site",
@@ -64,7 +124,9 @@
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "name": { "type": "string" }
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "city": { "type": "string" }
       },
       "required": ["id", "name"]
     },
@@ -73,36 +135,69 @@
       "description": "Product batch with expiry",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
         "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "lotNumber": { "type": "string" },
         "expiryDate": { "type": "string", "format": "date" },
-        "quantity": { "type": "number" }
+        "quantity": { "type": "number" },
+        "quarantineStatus": { "type": "string" },
+        "storageLocation": { "type": "string" }
       },
-      "required": ["id", "productId", "expiryDate", "quantity"]
+      "required": ["productId", "expiryDate", "quantity"]
     },
     "AuditLog": {
       "title": "AuditLog",
       "description": "System action history",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
         "userId": { "type": "string" },
-        "action": { "type": "string" },
-        "timestamp": { "type": "string", "format": "date-time" }
+        "action": { "type": "string" }
       },
-      "required": ["id", "userId", "action", "timestamp"]
+      "required": ["userId", "action"]
     },
     "Patient": {
       "title": "Patient",
       "description": "Patient record",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "history": { "type": "array", "items": { "type": "string" } }
+        "code": { "type": "string" },
+        "fullName": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "age": { "type": "number" },
+        "gender": { "type": "string" },
+        "allergies": { "type": "string" },
+        "chronicConditions": { "type": "string" },
+        "insuranceName": { "type": "string" },
+        "insuranceRate": { "type": "number" }
       },
-      "required": ["id", "name"]
+      "required": ["fullName"]
     },
+    "Prescription": {
+      "title": "Prescription",
+      "description": "Medical prescription record",
+      "type": "object",
+      "properties": {
+        "rxCode": { "type": "string" },
+        "patientId": { "type": "string" },
+        "patientName": { "type": "string" },
+        "doctorName": { "type": "string" },
+        "prescribedMedicines": { "type": "array" },
+        "date": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["patientName", "doctorName", "status"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "ERP configuration document",
+      "type": "object",
+      "properties": {
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    }
   },
   "firestore": {
     "/users/{userId}": {
@@ -113,6 +208,18 @@
       "schema": "Profile",
       "description": "User profiles"
     },
+    "/settings/{settingId}": {
+      "schema": "Setting",
+      "description": "Global ERP settings"
+    },
+    "/sites/{siteId}": {
+      "schema": "Site",
+      "description": "Individual pharmacy site"
+    },
+    "/sites/{siteId}/inventory/{productId}": {
+      "schema": "Product",
+      "description": "Inventory at a site"
+    },
     "/sites/{siteId}/alerts/{alertId}": {
       "schema": "Alert",
       "description": "Alerts for a site"
@@ -121,29 +228,37 @@
       "schema": "Procurement",
       "description": "Procurement orders"
     },
+    "/sites/{siteId}/suppliers/{supplierId}": {
+      "schema": "Supplier",
+      "description": "Approved suppliers at a site"
+    },
     "/sites/{siteId}/sales/{saleId}": {
       "schema": "Sale",
       "description": "Sales records"
     },
-    "/sites/{siteId}": {
-      "schema": "Site",
-      "description": "Individual pharmacy site"
+    "/sites/{siteId}/credits/{creditId}": {
+      "schema": "Credit",
+      "description": "Customer and insurance credits"
     },
     "/sites/{siteId}/lots/{lotId}": {
       "schema": "Lot",
       "description": "Inventory lots with expiry"
     },
-    "/sites/{siteId}/auditlogs/{logId}": {
-      "schema": "AuditLog",
-      "description": "System audit logs"
-    },
     "/sites/{siteId}/patients/{patientId}": {
       "schema": "Patient",
       "description": "Patient records"
     },
-    "/sites/{siteId}/inventory/{productId}": {
-      "schema": "Product",
-      "description": "Inventory at a site"
+    "/sites/{siteId}/prescriptions/{prescriptionId}": {
+      "schema": "Prescription",
+      "description": "Medical prescriptions"
+    },
+    "/sites/{siteId}/auditlogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "System audit logs"
+    },
+    "/sites/{siteId}/settings/{settingId}": {
+      "schema": "Setting",
+      "description": "Site-level settings"
     }
   }
 }
